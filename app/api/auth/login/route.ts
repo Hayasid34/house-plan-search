@@ -9,6 +9,10 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { username, password } = body;
 
+    console.log('[LOGIN] Login attempt for:', username);
+    console.log('[LOGIN] Supabase URL:', supabaseUrl);
+    console.log('[LOGIN] Anon key exists:', !!supabaseAnonKey);
+
     // バリデーション
     if (!username || !password) {
       return NextResponse.json(
@@ -27,12 +31,15 @@ export async function POST(request: NextRequest) {
     });
 
     if (error || !data.user || !data.session) {
-      console.error('Supabase auth error:', error);
+      console.error('[LOGIN] Supabase auth error:', error);
+      console.error('[LOGIN] Error details:', JSON.stringify(error, null, 2));
       return NextResponse.json(
         { error: 'ユーザー名またはパスワードが正しくありません' },
         { status: 401 }
       );
     }
+
+    console.log('[LOGIN] Auth successful for user:', data.user.id);
 
     // 認証済みセッションでaccountsテーブルをクエリ
     // 新しいクライアントにセッションを設定
