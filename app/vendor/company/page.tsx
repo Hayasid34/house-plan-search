@@ -438,7 +438,7 @@ export default function CompanyDashboard() {
                           <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
                             account.role === 'admin'
                               ? 'bg-[#F3F0FF] text-[#6554C0]'
-                              : account.role === 'sales'
+                              : account.role === 'editor'
                               ? 'bg-[#E9F2FF] text-[#0C66E4]'
                               : 'bg-[#F4F5F7] text-[#44546F]'
                           }`}>
