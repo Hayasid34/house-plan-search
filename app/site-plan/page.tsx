@@ -2,15 +2,23 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import dynamicImport from 'next/dynamic';
 import Konva from 'konva';
 import * as pdfjsLib from 'pdfjs-dist';
 import jsPDF from 'jspdf';
-import SitePlanCanvas from '@/components/SitePlanCanvas';
+
+// SitePlanCanvasを動的インポートして、SSRをスキップ
+const SitePlanCanvas = dynamicImport(() => import('@/components/SitePlanCanvas'), {
+  ssr: false,
+});
 
 // PDF.js workerの設定
 if (typeof window !== 'undefined') {
   pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
 }
+
+// このページを強制的に動的にレンダリング
+export const dynamic = 'force-dynamic';
 
 // 定数
 const SCALE_1_100 = 100; // 1/100縮尺

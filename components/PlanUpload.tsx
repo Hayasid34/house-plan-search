@@ -505,7 +505,7 @@ export default function PlanUpload({ onUploadComplete }: PlanUploadProps) {
                                     <label key={feature} className="flex items-center gap-1 text-xs cursor-pointer hover:bg-bg-soft p-1 rounded">
                                       <input
                                         type="checkbox"
-                                        checked={uploadedFile.editedData.features.includes(feature)}
+                                        checked={uploadedFile.editedData?.features.includes(feature) || false}
                                         onChange={() => toggleFeature(index, feature)}
                                         className="w-3 h-3"
                                       />
@@ -514,7 +514,7 @@ export default function PlanUpload({ onUploadComplete }: PlanUploadProps) {
                                   ))}
                                 </div>
                               </div>
-                              {uploadedFile.editedData.features.length > 0 && (
+                              {uploadedFile.editedData?.features && uploadedFile.editedData.features.length > 0 && (
                                 <div className="mt-1 flex flex-wrap gap-1">
                                   {uploadedFile.editedData.features.map(feat => (
                                     <span key={feat} className="text-xs px-2 py-0.5 bg-label-01 rounded flex items-center gap-1">

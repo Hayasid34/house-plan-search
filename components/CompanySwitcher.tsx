@@ -44,7 +44,7 @@ export default function CompanySwitcher({ onCompanyChange }: CompanySwitcherProp
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
         </svg>
         <span className="text-sm font-medium text-text-primary">
-          {selectedCompany?.display_name || 'デモ工務店'}
+          {selectedCompany?.name || 'デモ工務店'}
         </span>
         <svg
           className={`w-4 h-4 text-text-sub transition-transform ${isOpen ? 'rotate-180' : ''}`}
@@ -91,13 +91,12 @@ export default function CompanySwitcher({ onCompanyChange }: CompanySwitcherProp
                     </svg>
                     <div className="flex-1 min-w-0">
                       <p className="font-medium text-sm truncate">
-                        {company.display_name}
+                        {company.name}
                       </p>
                       <p className={`text-xs mt-0.5 ${
                         selectedCompanyId === company.id ? 'text-white opacity-80' : 'text-text-sub'
                       }`}>
-                        {company.service_area?.slice(0, 2).join('、')}
-                        {company.service_area && company.service_area.length > 2 && '...'}
+                        CST: {company.cst_number}
                       </p>
                     </div>
                     {selectedCompanyId === company.id && (
