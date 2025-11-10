@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { writeFile, mkdir } from 'fs/promises';
-import { existsSync } from 'fs';
-import path from 'path';
-import { readPlansData, writePlansData, Plan } from '@/lib/plansData';
+import { createClient } from '@supabase/supabase-js';
+import { cookies } from 'next/headers';
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
 export async function POST(request: NextRequest) {
   try {
@@ -24,42 +26,112 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // アップロードディレクトリを確保
-    const uploadsDir = path.join(process.cwd(), 'public', 'uploads');
-    if (!existsSync(uploadsDir)) {
-      await mkdir(uploadsDir, { recursive: true });
+    // Supabaseクライアントを作成（認証チェック用）
+    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+    // サービスロールクライアントを作成（ストレージ操作用）
+    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false
+      }
+    });
+
+    // 認証トークンを取得してセッションを設定
+    const cookieStore = await cookies();
+    const authToken = cookieStore.get('supabase-auth-token');
+
+    if (!authToken) {
+      return NextResponse.json(
+        { error: '認証が必要です' },
+        { status: 401 }
+      );
     }
 
-    // ファイルを保存
-    const bytes = await file.arrayBuffer();
-    const buffer = Buffer.from(bytes);
+    // セッションを設定
+    const { data: { user }, error: authError } = await supabase.auth.getUser(authToken.value);
 
-    // ユニークなファイル名を生成（タイムスタンプ付き）
+    if (authError || !user) {
+      return NextResponse.json(
+        { error: '認証が必要です' },
+        { status: 401 }
+      );
+    }
+
+    // ユーザーのcompany_idを取得
+    const { data: account, error: accountError } = await supabase
+      .from('accounts')
+      .select('company_id')
+      .eq('id', user.id)
+      .single();
+
+    if (accountError || !account) {
+      return NextResponse.json(
+        { error: '会社情報の取得に失敗しました' },
+        { status: 500 }
+      );
+    }
+
+    // PDFファイルをSupabase Storageにアップロード（サービスロールキーを使用）
     const timestamp = Date.now();
-    const fileName = `${timestamp}_${file.name}`;
-    const filePath = path.join(uploadsDir, fileName);
+    // ファイル名をURLセーフに変換（日本語や特殊文字を削除）
+    const safeFileName = file.name
+      .replace(/[^\w\s.-]/gi, '_') // 特殊文字をアンダースコアに置き換え
+      .replace(/\s+/g, '_');         // スペースをアンダースコアに置き換え
+    const fileName = `${timestamp}_${safeFileName}`;
+    const fileBuffer = await file.arrayBuffer();
 
-    await writeFile(filePath, buffer);
+    const { data: uploadData, error: uploadError } = await supabaseAdmin
+      .storage
+      .from('plan-pdfs')
+      .upload(fileName, fileBuffer, {
+        contentType: 'application/pdf',
+        upsert: false
+      });
 
-    // データベースに保存（今回はJSONファイル）
-    const plans = await readPlansData();
-    const newPlan: Plan = {
-      id: `plan_${timestamp}`,
-      title,
-      layout,
-      floors,
-      totalArea,
-      direction,
-      siteArea,
-      features,
-      pdfPath: `/uploads/${fileName}`,
-      originalFilename: file.name,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
+    if (uploadError) {
+      console.error('Storage upload error:', uploadError);
+      return NextResponse.json(
+        { error: 'ファイルのアップロードに失敗しました' },
+        { status: 500 }
+      );
+    }
 
-    plans.push(newPlan);
-    await writePlansData(plans);
+    // 公開URLを取得
+    const { data: { publicUrl } } = supabaseAdmin
+      .storage
+      .from('plan-pdfs')
+      .getPublicUrl(fileName);
+
+    // plansテーブルにデータを保存（サービスロールキーを使用）
+    const { data: newPlan, error: insertError } = await supabaseAdmin
+      .from('plans')
+      .insert({
+        company_id: account.company_id,
+        name: title, // 既存のnameカラムに値を設定
+        title,
+        layout,
+        floors,
+        total_area: totalArea,
+        direction,
+        site_area: siteArea,
+        features,
+        pdf_path: publicUrl,
+        original_filename: file.name,
+        created_by: user.id
+      })
+      .select()
+      .single();
+
+    if (insertError) {
+      console.error('Database insert error:', insertError);
+      // アップロードしたファイルを削除
+      await supabaseAdmin.storage.from('plan-pdfs').remove([fileName]);
+      return NextResponse.json(
+        { error: 'データの保存に失敗しました' },
+        { status: 500 }
+      );
+    }
 
     return NextResponse.json({
       success: true,
