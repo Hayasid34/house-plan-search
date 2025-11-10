@@ -102,13 +102,33 @@ export default function AccountsPage() {
       return;
     }
 
-    // TODO: API Routeを使用してパスワード更新（ベンダー側のデータと同期）
-    alert('パスワードを更新しました。（デモモードでは実際には保存されません）');
+    try {
+      const response = await fetch(`/api/accounts/${editingAccount.id}/password`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          newPassword,
+        }),
+      });
 
-    setShowPasswordModal(false);
-    setEditingAccount(null);
-    setNewPassword('');
-    setConfirmPassword('');
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || 'パスワードの更新に失敗しました');
+      }
+
+      alert('パスワードを更新しました。');
+
+      setShowPasswordModal(false);
+      setEditingAccount(null);
+      setNewPassword('');
+      setConfirmPassword('');
+    } catch (error) {
+      console.error('Password change error:', error);
+      alert(error instanceof Error ? error.message : 'パスワードの更新に失敗しました。');
+    }
   };
 
   const handleDeleteAccount = async (accountId: string) => {
