@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { addPhotoToPlan, removePhotoFromPlan, getPlan } from '@/lib/plansData';
-import { writeFile, unlink } from 'fs/promises';
-import path from 'path';
-import { Photo } from '@/lib/plansData';
+import { createClient } from '@supabase/supabase-js';
+import { cookies } from 'next/headers';
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
 // 写真を追加
 export async function POST(
@@ -22,58 +24,111 @@ export async function POST(
       );
     }
 
+    // Supabaseクライアントを作成（認証チェック用）
+    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+    // サービスロールクライアントを作成（ストレージ操作用）
+    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false
+      }
+    });
+
+    // 認証トークンを取得
+    const cookieStore = await cookies();
+    const authToken = cookieStore.get('supabase-auth-token');
+
+    if (!authToken) {
+      return NextResponse.json(
+        { error: '認証が必要です' },
+        { status: 401 }
+      );
+    }
+
+    // ユーザー情報を取得
+    const { data: { user }, error: authError } = await supabase.auth.getUser(authToken.value);
+
+    if (authError || !user) {
+      return NextResponse.json(
+        { error: '認証が必要です' },
+        { status: 401 }
+      );
+    }
+
     // プランが存在するか確認
-    const plan = await getPlan(planId);
-    if (!plan) {
+    const { data: plan, error: planError } = await supabaseAdmin
+      .from('plans')
+      .select('id, company_id')
+      .eq('id', planId)
+      .single();
+
+    if (planError || !plan) {
       return NextResponse.json(
         { error: 'プランが見つかりません' },
         { status: 404 }
       );
     }
 
-    // ファイルを保存
-    const bytes = await file.arrayBuffer();
-    const buffer = Buffer.from(bytes);
+    // 写真ファイルをSupabase Storageにアップロード
+    const timestamp = Date.now();
+    const safeFileName = file.name
+      .replace(/[^\w\s.-]/gi, '_')
+      .replace(/\s+/g, '_');
+    const fileName = `photos/${planId}/${timestamp}_${safeFileName}`;
+    const fileBuffer = await file.arrayBuffer();
 
-    const photoId = `photo_${Date.now()}`;
-    const fileExtension = file.name.split('.').pop();
-    const filename = `${photoId}.${fileExtension}`;
-    const uploadsDir = path.join(process.cwd(), 'public', 'photos');
-    const filePath = path.join(uploadsDir, filename);
+    const { data: uploadData, error: uploadError } = await supabaseAdmin
+      .storage
+      .from('plan-pdfs')
+      .upload(fileName, fileBuffer, {
+        contentType: file.type,
+        upsert: false
+      });
 
-    // uploadsディレクトリを作成（存在しない場合）
-    try {
-      await writeFile(filePath, buffer);
-    } catch (error) {
-      // ディレクトリが存在しない場合は作成
-      const fs = require('fs');
-      if (!fs.existsSync(uploadsDir)) {
-        fs.mkdirSync(uploadsDir, { recursive: true });
-      }
-      await writeFile(filePath, buffer);
+    if (uploadError) {
+      console.error('Storage upload error:', uploadError);
+      return NextResponse.json(
+        { error: 'ファイルのアップロードに失敗しました' },
+        { status: 500 }
+      );
     }
 
-    // 写真情報を作成
-    const photo: Photo = {
-      id: photoId,
-      filePath: `/photos/${filename}`,
-      originalFilename: file.name,
-      uploadedAt: new Date().toISOString(),
-    };
+    // 公開URLを取得
+    const { data: { publicUrl } } = supabaseAdmin
+      .storage
+      .from('plan-pdfs')
+      .getPublicUrl(fileName);
 
-    // プランに写真を追加
-    const updatedPlan = await addPhotoToPlan(planId, photo);
+    // photosテーブルにデータを保存
+    const { data: newPhoto, error: insertError } = await supabaseAdmin
+      .from('photos')
+      .insert({
+        plan_id: planId,
+        file_path: publicUrl,
+        original_filename: file.name
+      })
+      .select()
+      .single();
 
-    if (!updatedPlan) {
+    if (insertError) {
+      console.error('Database insert error:', insertError);
+      // アップロードしたファイルを削除
+      await supabaseAdmin.storage.from('plan-pdfs').remove([fileName]);
       return NextResponse.json(
-        { error: '写真の追加に失敗しました' },
+        { error: '写真の保存に失敗しました' },
         { status: 500 }
       );
     }
 
     return NextResponse.json({
       success: true,
-      photo,
+      photo: {
+        id: newPhoto.id,
+        filePath: newPhoto.file_path,
+        originalFilename: newPhoto.original_filename,
+        uploadedAt: newPhoto.created_at
+      },
       message: '写真を追加しました',
     });
   } catch (error) {
@@ -102,35 +157,68 @@ export async function DELETE(
       );
     }
 
-    // プランを取得して写真のファイルパスを確認
-    const plan = await getPlan(planId);
-    if (!plan) {
+    // Supabaseクライアントを作成（認証チェック用）
+    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+    // サービスロールクライアントを作成（ストレージ操作用）
+    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false
+      }
+    });
+
+    // 認証トークンを取得
+    const cookieStore = await cookies();
+    const authToken = cookieStore.get('supabase-auth-token');
+
+    if (!authToken) {
       return NextResponse.json(
-        { error: 'プランが見つかりません' },
-        { status: 404 }
+        { error: '認証が必要です' },
+        { status: 401 }
       );
     }
 
-    const photo = plan.photos?.find(p => p.id === photoId);
-    if (!photo) {
+    // ユーザー情報を取得
+    const { data: { user }, error: authError } = await supabase.auth.getUser(authToken.value);
+
+    if (authError || !user) {
+      return NextResponse.json(
+        { error: '認証が必要です' },
+        { status: 401 }
+      );
+    }
+
+    // 写真情報を取得
+    const { data: photo, error: photoError } = await supabaseAdmin
+      .from('photos')
+      .select('*')
+      .eq('id', photoId)
+      .eq('plan_id', planId)
+      .single();
+
+    if (photoError || !photo) {
       return NextResponse.json(
         { error: '写真が見つかりません' },
         { status: 404 }
       );
     }
 
-    // ファイルを削除
-    try {
-      const photoPath = path.join(process.cwd(), 'public', photo.filePath);
-      await unlink(photoPath);
-    } catch (error) {
-      console.error('Photo file deletion error:', error);
+    // Storageからファイルのパスを抽出
+    const filePathMatch = photo.file_path.match(/plan-pdfs\/(.+)$/);
+    if (filePathMatch) {
+      const filePath = filePathMatch[1];
+      await supabaseAdmin.storage.from('plan-pdfs').remove([filePath]);
     }
 
     // データベースから削除
-    const updatedPlan = await removePhotoFromPlan(planId, photoId);
+    const { error: deleteError } = await supabaseAdmin
+      .from('photos')
+      .delete()
+      .eq('id', photoId);
 
-    if (!updatedPlan) {
+    if (deleteError) {
+      console.error('Database delete error:', deleteError);
       return NextResponse.json(
         { error: '写真の削除に失敗しました' },
         { status: 500 }

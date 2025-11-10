@@ -117,7 +117,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // 各プランの図面を取得
+    // 各プランの図面と写真を取得
     const plansWithDrawings = await Promise.all(
       (plans || []).map(async (plan: any) => {
         const { data: drawings } = await supabase
@@ -126,9 +126,16 @@ export async function GET(request: NextRequest) {
           .eq('plan_id', plan.id)
           .order('created_at', { ascending: false });
 
+        const { data: photos } = await supabase
+          .from('photos')
+          .select('*')
+          .eq('plan_id', plan.id)
+          .order('created_at', { ascending: false });
+
         return {
           ...plan,
-          drawings: drawings || []
+          drawings: drawings || [],
+          photos: photos || []
         };
       })
     );
@@ -155,7 +162,12 @@ export async function GET(request: NextRequest) {
         originalFilename: d.original_filename,
         uploadedAt: d.created_at
       })),
-      photos: plan.photos || [] // 写真は後で実装
+      photos: (plan.photos || []).map((p: any) => ({
+        id: p.id,
+        filePath: p.file_path,
+        originalFilename: p.original_filename,
+        uploadedAt: p.created_at
+      }))
     }));
 
     return NextResponse.json({
