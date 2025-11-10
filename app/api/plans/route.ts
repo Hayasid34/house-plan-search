@@ -117,8 +117,24 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    // 各プランの図面を取得
+    const plansWithDrawings = await Promise.all(
+      (plans || []).map(async (plan: any) => {
+        const { data: drawings } = await supabase
+          .from('drawings')
+          .select('*')
+          .eq('plan_id', plan.id)
+          .order('created_at', { ascending: false });
+
+        return {
+          ...plan,
+          drawings: drawings || []
+        };
+      })
+    );
+
     // Supabaseのスネークケースのフィールド名をキャメルケースに変換
-    const formattedPlans = (plans || []).map((plan: any) => ({
+    const formattedPlans = plansWithDrawings.map((plan: any) => ({
       id: plan.id,
       title: plan.title || plan.name, // titleがない場合はnameを使用
       layout: plan.layout,
@@ -132,6 +148,14 @@ export async function GET(request: NextRequest) {
       favorite: plan.favorite || false,
       createdAt: plan.created_at,
       updatedAt: plan.updated_at,
+      drawings: (plan.drawings || []).map((d: any) => ({
+        id: d.id,
+        type: d.type,
+        filePath: d.file_path,
+        originalFilename: d.original_filename,
+        uploadedAt: d.created_at
+      })),
+      photos: plan.photos || [] // 写真は後で実装
     }));
 
     return NextResponse.json({
