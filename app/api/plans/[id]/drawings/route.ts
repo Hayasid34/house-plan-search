@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { addDrawingToPlan, removeDrawingFromPlan, getPlan } from '@/lib/plansData';
-import { writeFile, unlink } from 'fs/promises';
-import path from 'path';
-import { Drawing } from '@/lib/plansData';
+import { createClient } from '@supabase/supabase-js';
+import { cookies } from 'next/headers';
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
 // 図面を追加
 export async function POST(
@@ -14,7 +16,7 @@ export async function POST(
     const formData = await request.formData();
 
     const file = formData.get('file') as File;
-    const type = formData.get('type') as Drawing['type'];
+    const type = formData.get('type') as string;
 
     if (!file || !type) {
       return NextResponse.json(
@@ -23,59 +25,113 @@ export async function POST(
       );
     }
 
+    // Supabaseクライアントを作成（認証チェック用）
+    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+    // サービスロールクライアントを作成（ストレージ操作用）
+    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false
+      }
+    });
+
+    // 認証トークンを取得
+    const cookieStore = await cookies();
+    const authToken = cookieStore.get('supabase-auth-token');
+
+    if (!authToken) {
+      return NextResponse.json(
+        { error: '認証が必要です' },
+        { status: 401 }
+      );
+    }
+
+    // ユーザー情報を取得
+    const { data: { user }, error: authError } = await supabase.auth.getUser(authToken.value);
+
+    if (authError || !user) {
+      return NextResponse.json(
+        { error: '認証が必要です' },
+        { status: 401 }
+      );
+    }
+
     // プランが存在するか確認
-    const plan = await getPlan(planId);
-    if (!plan) {
+    const { data: plan, error: planError } = await supabaseAdmin
+      .from('plans')
+      .select('id, company_id')
+      .eq('id', planId)
+      .single();
+
+    if (planError || !plan) {
       return NextResponse.json(
         { error: 'プランが見つかりません' },
         { status: 404 }
       );
     }
 
-    // ファイルを保存
-    const bytes = await file.arrayBuffer();
-    const buffer = Buffer.from(bytes);
+    // 図面ファイルをSupabase Storageにアップロード
+    const timestamp = Date.now();
+    const safeFileName = file.name
+      .replace(/[^\w\s.-]/gi, '_')
+      .replace(/\s+/g, '_');
+    const fileName = `drawings/${planId}/${timestamp}_${safeFileName}`;
+    const fileBuffer = await file.arrayBuffer();
 
-    const drawingId = `drawing_${Date.now()}`;
-    const fileExtension = file.name.split('.').pop();
-    const filename = `${drawingId}.${fileExtension}`;
-    const uploadsDir = path.join(process.cwd(), 'public', 'drawings');
-    const filePath = path.join(uploadsDir, filename);
+    const { data: uploadData, error: uploadError } = await supabaseAdmin
+      .storage
+      .from('plan-pdfs')
+      .upload(fileName, fileBuffer, {
+        contentType: file.type,
+        upsert: false
+      });
 
-    // uploadsディレクトリを作成（存在しない場合）
-    try {
-      await writeFile(filePath, buffer);
-    } catch (error) {
-      // ディレクトリが存在しない場合は作成
-      const fs = require('fs');
-      if (!fs.existsSync(uploadsDir)) {
-        fs.mkdirSync(uploadsDir, { recursive: true });
-      }
-      await writeFile(filePath, buffer);
+    if (uploadError) {
+      console.error('Storage upload error:', uploadError);
+      return NextResponse.json(
+        { error: 'ファイルのアップロードに失敗しました' },
+        { status: 500 }
+      );
     }
 
-    // 図面情報を作成
-    const drawing: Drawing = {
-      id: drawingId,
-      type,
-      filePath: `/drawings/${filename}`,
-      originalFilename: file.name,
-      uploadedAt: new Date().toISOString(),
-    };
+    // 公開URLを取得
+    const { data: { publicUrl } } = supabaseAdmin
+      .storage
+      .from('plan-pdfs')
+      .getPublicUrl(fileName);
 
-    // プランに図面を追加
-    const updatedPlan = await addDrawingToPlan(planId, drawing);
+    // drawingsテーブルにデータを保存
+    const { data: newDrawing, error: insertError } = await supabaseAdmin
+      .from('drawings')
+      .insert({
+        plan_id: planId,
+        type,
+        file_path: publicUrl,
+        original_filename: file.name
+      })
+      .select()
+      .single();
 
-    if (!updatedPlan) {
+    if (insertError) {
+      console.error('Database insert error:', insertError);
+      // アップロードしたファイルを削除
+      await supabaseAdmin.storage.from('plan-pdfs').remove([fileName]);
       return NextResponse.json(
-        { error: '図面の追加に失敗しました' },
+        { error: '図面の保存に失敗しました' },
         { status: 500 }
       );
     }
 
     return NextResponse.json({
       success: true,
-      drawing,
+      drawing: {
+        id: newDrawing.id,
+        type: newDrawing.type,
+        filePath: newDrawing.file_path,
+        originalFilename: newDrawing.original_filename,
+        uploadedAt: newDrawing.created_at
+      },
       message: '図面を追加しました',
     });
   } catch (error) {
@@ -104,35 +160,68 @@ export async function DELETE(
       );
     }
 
-    // プランを取得して図面のファイルパスを確認
-    const plan = await getPlan(planId);
-    if (!plan) {
+    // Supabaseクライアントを作成（認証チェック用）
+    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+    // サービスロールクライアントを作成（ストレージ操作用）
+    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false
+      }
+    });
+
+    // 認証トークンを取得
+    const cookieStore = await cookies();
+    const authToken = cookieStore.get('supabase-auth-token');
+
+    if (!authToken) {
       return NextResponse.json(
-        { error: 'プランが見つかりません' },
-        { status: 404 }
+        { error: '認証が必要です' },
+        { status: 401 }
       );
     }
 
-    const drawing = plan.drawings?.find(d => d.id === drawingId);
-    if (!drawing) {
+    // ユーザー情報を取得
+    const { data: { user }, error: authError } = await supabase.auth.getUser(authToken.value);
+
+    if (authError || !user) {
+      return NextResponse.json(
+        { error: '認証が必要です' },
+        { status: 401 }
+      );
+    }
+
+    // 図面情報を取得
+    const { data: drawing, error: drawingError } = await supabaseAdmin
+      .from('drawings')
+      .select('*')
+      .eq('id', drawingId)
+      .eq('plan_id', planId)
+      .single();
+
+    if (drawingError || !drawing) {
       return NextResponse.json(
         { error: '図面が見つかりません' },
         { status: 404 }
       );
     }
 
-    // ファイルを削除
-    try {
-      const drawingPath = path.join(process.cwd(), 'public', drawing.filePath);
-      await unlink(drawingPath);
-    } catch (error) {
-      console.error('Drawing file deletion error:', error);
+    // Storageからファイルのパスを抽出
+    const filePathMatch = drawing.file_path.match(/plan-pdfs\/(.+)$/);
+    if (filePathMatch) {
+      const filePath = filePathMatch[1];
+      await supabaseAdmin.storage.from('plan-pdfs').remove([filePath]);
     }
 
     // データベースから削除
-    const updatedPlan = await removeDrawingFromPlan(planId, drawingId);
+    const { error: deleteError } = await supabaseAdmin
+      .from('drawings')
+      .delete()
+      .eq('id', drawingId);
 
-    if (!updatedPlan) {
+    if (deleteError) {
+      console.error('Database delete error:', deleteError);
       return NextResponse.json(
         { error: '図面の削除に失敗しました' },
         { status: 500 }
