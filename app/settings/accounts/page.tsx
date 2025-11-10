@@ -126,44 +126,39 @@ export default function AccountsPage() {
   const handleAccountRequest = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    // メール本文を作成
-    const emailBody =
-      `新規アカウント作成依頼\n\n` +
-      `会社名: ${requestCompanyName}\n` +
-      `氏名: ${requestName}\n` +
-      `メールアドレス: ${requestEmail}\n` +
-      `連絡先: ${requestPhone}\n\n` +
-      `よろしくお願いいたします。`;
+    try {
+      // APIにPOSTリクエストを送信
+      const response = await fetch('/api/account-request', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          companyName: requestCompanyName,
+          name: requestName,
+          email: requestEmail,
+          phone: requestPhone,
+        }),
+      });
 
-    // mailto:リンクを作成
-    const subject = encodeURIComponent('新規アカウント作成依頼');
-    const body = encodeURIComponent(emailBody);
-    const mailtoLink = `mailto:cs.group@dandori-work.com?subject=${subject}&body=${body}`;
+      const result = await response.json();
 
-    // メールクライアントを開く
-    window.open(mailtoLink);
-
-    // 少し待ってからクリップボードにもコピー（バックアップとして）
-    setTimeout(async () => {
-      const copyText =
-        `送信先: cs.group@dandori-work.com\n` +
-        `件名: 新規アカウント作成依頼\n\n` +
-        emailBody;
-
-      try {
-        await navigator.clipboard.writeText(copyText);
-        console.log('依頼内容をクリップボードにもコピーしました');
-      } catch (error) {
-        console.log('クリップボードへのコピーに失敗しました');
+      if (!response.ok) {
+        throw new Error(result.error || 'メール送信に失敗しました');
       }
-    }, 100);
 
-    // モーダルを閉じてフォームをリセット
-    setShowRequestModal(false);
-    setRequestCompanyName('');
-    setRequestName('');
-    setRequestEmail('');
-    setRequestPhone('');
+      alert('アカウント作成依頼を送信しました。担当者から連絡をお待ちください。');
+
+      // モーダルを閉じてフォームをリセット
+      setShowRequestModal(false);
+      setRequestCompanyName('');
+      setRequestName('');
+      setRequestEmail('');
+      setRequestPhone('');
+    } catch (error) {
+      console.error('Account request error:', error);
+      alert(error instanceof Error ? error.message : 'メール送信に失敗しました。しばらくしてから再度お試しください。');
+    }
   };
 
   const getRoleBadgeColor = (role: string) => {
