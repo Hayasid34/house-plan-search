@@ -18,6 +18,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Resend APIキーの確認
+    if (!resend) {
+      return NextResponse.json(
+        { error: 'メール送信機能が設定されていません' },
+        { status: 503 }
+      );
+    }
+
     // メール送信
     const { data, error } = await resend.emails.send({
       from: 'DandoriFinder <noreply@updates.dandori-work.com>',
