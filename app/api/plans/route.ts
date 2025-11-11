@@ -108,10 +108,10 @@ export async function GET(request: NextRequest) {
         .filter(f => f.length > 0);
 
       if (features.length > 0) {
-        // Supabaseのcontainsメソッドを使用して、指定されたすべての特徴を含むプランを検索
-        // 各特徴に対してcontainsを個別に適用することでAND条件を実現
+        // PostgreSQLの@>演算子を使用（cs = contains）
+        // 各特徴に対して個別にfilterを適用することでAND条件を実現
         features.forEach(feature => {
-          query = query.contains('features', [feature]);
+          query = query.filter('features', 'cs', JSON.stringify([feature]));
         });
       }
     }
