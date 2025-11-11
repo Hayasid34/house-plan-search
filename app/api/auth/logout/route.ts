@@ -8,7 +8,10 @@ export async function POST(request: NextRequest) {
       message: 'ログアウトしました',
     });
 
-    // セッションクッキーを削除
+    // Supabase認証トークンを削除
+    response.cookies.delete('supabase-auth-token');
+
+    // 古いセッションクッキーも削除（互換性のため）
     response.cookies.delete('session');
 
     return response;
