@@ -100,19 +100,20 @@ export async function GET(request: NextRequest) {
     // 特徴で絞り込み（JSONBの配列に含まれているか）
     // 選択されたすべての特徴を持つプランのみを返す（AND条件）
     const featuresStr = searchParams.get('features');
-    console.log('🔍 Features query param:', featuresStr);
-    if (featuresStr) {
+    if (featuresStr && featuresStr.trim()) {
       // 空白をトリムして配列を作成
-      const features = featuresStr.split(',').map(f => f.trim()).filter(f => f);
-      console.log('🔍 Parsed and trimmed features array:', features);
+      const features = featuresStr
+        .split(',')
+        .map(f => f.trim())
+        .filter(f => f.length > 0);
+
       if (features.length > 0) {
         // PostgreSQLの@>演算子を使用して、指定されたすべての特徴を含むプランを検索
         // 各特徴に対してfilterを個別に適用することでAND条件を実現
         // JSON.stringifyを使用して日本語文字を正しくエンコード
-        for (const feature of features) {
-          console.log('🔍 Applying filter for feature:', feature);
+        features.forEach(feature => {
           query = query.filter('features', '@>', JSON.stringify([feature]));
-        }
+        });
       }
     }
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 
 interface PDFThumbnailProps {
   pdfPath: string;
@@ -9,6 +9,34 @@ interface PDFThumbnailProps {
 export default function PDFThumbnail({ pdfPath }: PDFThumbnailProps) {
   const [hasError, setHasError] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [isVisible, setIsVisible] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Intersection Observer でレイジーローディング
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            setIsVisible(true);
+            observer.disconnect();
+          }
+        });
+      },
+      {
+        rootMargin: '100px', // 100px手前から読み込み開始
+        threshold: 0.01
+      }
+    );
+
+    if (containerRef.current) {
+      observer.observe(containerRef.current);
+    }
+
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
 
   const handleLoad = () => {
     setIsLoading(false);
@@ -31,36 +59,47 @@ export default function PDFThumbnail({ pdfPath }: PDFThumbnailProps) {
   }
 
   return (
-    <div className="relative w-full h-full">
-      {isLoading && (
+    <div ref={containerRef} className="relative w-full h-full bg-bg-soft">
+      {!isVisible ? (
+        // プレースホルダー（PDFアイコン）
         <div className="absolute inset-0 flex items-center justify-center">
-          <div className="text-center">
-            <div className="inline-block animate-spin rounded-full h-8 w-8 border-4 border-dw-blue border-t-transparent"></div>
-            <p className="mt-2 text-sm">読込中...</p>
-          </div>
+          <svg className="h-16 w-16 text-icon-disable" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+          </svg>
         </div>
+      ) : (
+        <>
+          {isLoading && (
+            <div className="absolute inset-0 flex items-center justify-center">
+              <div className="text-center">
+                <div className="inline-block animate-spin rounded-full h-8 w-8 border-4 border-dw-blue border-t-transparent"></div>
+                <p className="mt-2 text-sm">読込中...</p>
+              </div>
+            </div>
+          )}
+          <object
+            data={`${pdfPath}#page=1&view=FitH&toolbar=0&navpanes=0&scrollbar=0`}
+            type="application/pdf"
+            className="w-full h-full"
+            onLoad={handleLoad}
+            onError={handleError}
+            style={{
+              minHeight: '192px',
+              pointerEvents: 'none'
+            }}
+          >
+            <embed
+              src={`${pdfPath}#page=1&view=FitH&toolbar=0&navpanes=0&scrollbar=0`}
+              type="application/pdf"
+              className="w-full h-full"
+              style={{
+                minHeight: '192px',
+                pointerEvents: 'none'
+              }}
+            />
+          </object>
+        </>
       )}
-      <object
-        data={`${pdfPath}#page=1&view=FitH&toolbar=0&navpanes=0&scrollbar=0`}
-        type="application/pdf"
-        className="w-full h-full"
-        onLoad={handleLoad}
-        onError={handleError}
-        style={{
-          minHeight: '192px',
-          pointerEvents: 'none'
-        }}
-      >
-        <embed
-          src={`${pdfPath}#page=1&view=FitH&toolbar=0&navpanes=0&scrollbar=0`}
-          type="application/pdf"
-          className="w-full h-full"
-          style={{
-            minHeight: '192px',
-            pointerEvents: 'none'
-          }}
-        />
-      </object>
     </div>
   );
 }
