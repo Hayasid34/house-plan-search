@@ -117,28 +117,46 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // 各プランの図面と写真を取得
-    const plansWithDrawings = await Promise.all(
-      (plans || []).map(async (plan: any) => {
-        const { data: drawings } = await supabase
-          .from('drawings')
-          .select('*')
-          .eq('plan_id', plan.id)
-          .order('created_at', { ascending: false });
+    // プランIDのリストを取得
+    const planIds = (plans || []).map((p: any) => p.id);
 
-        const { data: photos } = await supabase
-          .from('photos')
-          .select('*')
-          .eq('plan_id', plan.id)
-          .order('created_at', { ascending: false });
+    // 図面と写真を一括取得（N+1クエリを回避）
+    const [drawingsResult, photosResult] = await Promise.all([
+      planIds.length > 0
+        ? supabase
+            .from('drawings')
+            .select('*')
+            .in('plan_id', planIds)
+            .order('created_at', { ascending: false })
+        : Promise.resolve({ data: [] }),
+      planIds.length > 0
+        ? supabase
+            .from('photos')
+            .select('*')
+            .in('plan_id', planIds)
+            .order('created_at', { ascending: false })
+        : Promise.resolve({ data: [] })
+    ]);
 
-        return {
-          ...plan,
-          drawings: drawings || [],
-          photos: photos || []
-        };
-      })
-    );
+    // 図面と写真をプランIDごとにグループ化
+    const drawingsByPlan = (drawingsResult.data || []).reduce((acc: any, d: any) => {
+      if (!acc[d.plan_id]) acc[d.plan_id] = [];
+      acc[d.plan_id].push(d);
+      return acc;
+    }, {});
+
+    const photosByPlan = (photosResult.data || []).reduce((acc: any, p: any) => {
+      if (!acc[p.plan_id]) acc[p.plan_id] = [];
+      acc[p.plan_id].push(p);
+      return acc;
+    }, {});
+
+    // プランに図面と写真を統合
+    const plansWithDrawings = (plans || []).map((plan: any) => ({
+      ...plan,
+      drawings: drawingsByPlan[plan.id] || [],
+      photos: photosByPlan[plan.id] || []
+    }));
 
     // Supabaseのスネークケースのフィールド名をキャメルケースに変換
     const formattedPlans = plansWithDrawings.map((plan: any) => ({

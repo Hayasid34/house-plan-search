@@ -63,13 +63,13 @@ export default function Home() {
     }
   };
 
-  // 全プラン数を取得
+  // 全プラン数を取得（高速化: 件数のみ取得）
   const fetchTotalPlansCount = async () => {
     try {
-      const response = await fetch('/api/plans');
+      const response = await fetch('/api/plans/count');
       const data = await response.json();
       if (data.success) {
-        setTotalPlansCount(data.plans.length);
+        setTotalPlansCount(data.count);
       }
     } catch (error) {
       console.error('Failed to fetch total plans count:', error);
