@@ -205,7 +205,9 @@ export default function PlanUpload({ onUploadComplete }: PlanUploadProps) {
       try {
         const formData = new FormData();
         formData.append('file', file);
-        formData.append('title', parseResult.data.title);
+        // ファイル名（拡張子なし）をタイトルとして使用
+        const titleFromFilename = file.name.replace(/\.pdf$/i, '');
+        formData.append('title', titleFromFilename);
         formData.append('layout', parseResult.data.layout);
         formData.append('floors', parseResult.data.floors);
         formData.append('totalArea', parseResult.data.totalArea.toString());
