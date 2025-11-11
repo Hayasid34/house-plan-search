@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { deletePlan, getPlan, readPlansData, writePlansData, toggleFavorite } from '@/lib/plansData';
-import { getUsernameFromRequest } from '@/lib/auth';
-import { getUserByUsername } from '@/lib/users';
-import { hasPermission, Permissions } from '@/lib/permissions';
-import { unlink } from 'fs/promises';
-import path from 'path';
+import { createClient } from '@supabase/supabase-js';
+import { cookies } from 'next/headers';
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
 // プラン情報を更新
 export async function PATCH(
@@ -12,57 +12,129 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    // 権限チェック
-    const username = getUsernameFromRequest(request);
-    if (!username) {
+    const { id } = await params;
+
+    // Supabaseクライアントを作成
+    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false
+      }
+    });
+
+    // 認証トークンを取得
+    const cookieStore = await cookies();
+    const authToken = cookieStore.get('supabase-auth-token');
+
+    if (!authToken) {
       return NextResponse.json(
         { error: 'ログインが必要です' },
         { status: 401 }
       );
     }
 
-    const user = getUserByUsername(username);
-    if (!user) {
+    // ユーザー情報を取得
+    const { data: { user }, error: authError } = await supabase.auth.getUser(authToken.value);
+
+    if (authError || !user) {
       return NextResponse.json(
-        { error: 'ユーザーが見つかりません' },
-        { status: 404 }
+        { error: '認証が必要です' },
+        { status: 401 }
       );
     }
 
-    if (!hasPermission(user.role, Permissions.EDIT_PLANS)) {
+    // ユーザーのアカウント情報を取得して権限確認
+    const { data: account, error: accountError } = await supabaseAdmin
+      .from('accounts')
+      .select('role, company_id')
+      .eq('id', user.id)
+      .single();
+
+    if (accountError || !account) {
+      return NextResponse.json(
+        { error: 'アカウント情報の取得に失敗しました' },
+        { status: 500 }
+      );
+    }
+
+    // 編集権限チェック（admin または editor）
+    if (account.role !== 'admin' && account.role !== 'editor') {
       return NextResponse.json(
         { error: 'プランを編集する権限がありません' },
         { status: 403 }
       );
     }
 
-    const { id } = await params;
-    const updates = await request.json();
+    // プランを取得して会社IDを確認
+    const { data: plan, error: planError } = await supabaseAdmin
+      .from('plans')
+      .select('company_id')
+      .eq('id', id)
+      .single();
 
-    const plans = await readPlansData();
-    const planIndex = plans.findIndex(p => p.id === id);
-
-    if (planIndex === -1) {
+    if (planError || !plan) {
       return NextResponse.json(
         { error: 'プランが見つかりません' },
         { status: 404 }
       );
     }
 
-    // プラン情報を更新
-    plans[planIndex] = {
-      ...plans[planIndex],
-      ...updates,
-      // titleを再生成
-      title: `${updates.totalArea || plans[planIndex].totalArea}坪 ${updates.layout || plans[planIndex].layout} ${updates.floors || plans[planIndex].floors} ${updates.direction || plans[planIndex].direction}道路`,
-      updatedAt: new Date().toISOString(),
-    };
+    // 同じ会社のプランかチェック
+    if (plan.company_id !== account.company_id) {
+      return NextResponse.json(
+        { error: 'このプランを編集する権限がありません' },
+        { status: 403 }
+      );
+    }
 
-    await writePlansData(plans);
+    const updates = await request.json();
+
+    // プラン情報を更新
+    const { data: updatedPlan, error: updateError } = await supabaseAdmin
+      .from('plans')
+      .update({
+        layout: updates.layout,
+        floors: updates.floors,
+        total_area: updates.totalArea,
+        direction: updates.direction,
+        site_area: updates.siteArea,
+        features: updates.features,
+        title: `${updates.totalArea || ''}坪 ${updates.layout || ''} ${updates.floors || ''} ${updates.direction || ''}道路`,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (updateError) {
+      console.error('Plan update error:', updateError);
+      return NextResponse.json(
+        { error: 'プランの更新に失敗しました' },
+        { status: 500 }
+      );
+    }
+
+    // フォーマット変換して返す
+    const formattedPlan = {
+      id: updatedPlan.id,
+      title: updatedPlan.title,
+      layout: updatedPlan.layout,
+      floors: updatedPlan.floors,
+      totalArea: updatedPlan.total_area,
+      direction: updatedPlan.direction,
+      siteArea: updatedPlan.site_area,
+      features: updatedPlan.features || [],
+      pdfPath: updatedPlan.pdf_path,
+      originalFilename: updatedPlan.original_filename,
+      favorite: updatedPlan.favorite || false,
+      createdAt: updatedPlan.created_at,
+      updatedAt: updatedPlan.updated_at,
+    };
 
     return NextResponse.json({
       success: true,
-      plan: plans[planIndex],
+      plan: formattedPlan,
     });
   } catch (error) {
     console.error('Plan update error:', error);
@@ -78,55 +150,143 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    // 権限チェック
-    const username = getUsernameFromRequest(request);
-    if (!username) {
+    const { id } = await params;
+
+    // Supabaseクライアントを作成
+    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false
+      }
+    });
+
+    // 認証トークンを取得
+    const cookieStore = await cookies();
+    const authToken = cookieStore.get('supabase-auth-token');
+
+    if (!authToken) {
       return NextResponse.json(
         { error: 'ログインが必要です' },
         { status: 401 }
       );
     }
 
-    const user = getUserByUsername(username);
-    if (!user) {
+    // ユーザー情報を取得
+    const { data: { user }, error: authError } = await supabase.auth.getUser(authToken.value);
+
+    if (authError || !user) {
       return NextResponse.json(
-        { error: 'ユーザーが見つかりません' },
-        { status: 404 }
+        { error: '認証が必要です' },
+        { status: 401 }
       );
     }
 
-    if (!hasPermission(user.role, Permissions.DELETE_PLANS)) {
+    // ユーザーのアカウント情報を取得して権限確認
+    const { data: account, error: accountError } = await supabaseAdmin
+      .from('accounts')
+      .select('role, company_id')
+      .eq('id', user.id)
+      .single();
+
+    if (accountError || !account) {
+      return NextResponse.json(
+        { error: 'アカウント情報の取得に失敗しました' },
+        { status: 500 }
+      );
+    }
+
+    // 削除権限チェック（admin または editor）
+    if (account.role !== 'admin' && account.role !== 'editor') {
       return NextResponse.json(
         { error: 'プランを削除する権限がありません' },
         { status: 403 }
       );
     }
 
-    const { id } = await params;
+    // プランを取得して会社IDとファイルパスを確認
+    const { data: plan, error: planError } = await supabaseAdmin
+      .from('plans')
+      .select('company_id, pdf_path')
+      .eq('id', id)
+      .single();
 
-    // プランを取得してPDFファイルのパスを確認
-    const plan = await getPlan(id);
-
-    if (!plan) {
+    if (planError || !plan) {
       return NextResponse.json(
         { error: 'プランが見つかりません' },
         { status: 404 }
       );
     }
 
-    // PDFファイルを削除
-    try {
-      const pdfPath = path.join(process.cwd(), 'public', plan.pdfPath);
-      await unlink(pdfPath);
-    } catch (error) {
-      console.error('PDF file deletion error:', error);
-      // ファイルが存在しない場合は続行
+    // 同じ会社のプランかチェック
+    if (plan.company_id !== account.company_id) {
+      return NextResponse.json(
+        { error: 'このプランを削除する権限がありません' },
+        { status: 403 }
+      );
     }
 
-    // データベースから削除
-    const success = await deletePlan(id);
+    // Supabase Storageから削除（PDFファイル）
+    try {
+      // pdf_pathから実際のファイルパスを抽出
+      // 例: "https://xxx.supabase.co/storage/v1/object/public/plan-pdfs/plans/xxx.pdf"
+      // -> "plans/xxx.pdf"
+      const filePathMatch = plan.pdf_path.match(/plan-pdfs\/(.+)$/);
+      if (filePathMatch) {
+        const filePath = filePathMatch[1];
+        await supabaseAdmin.storage.from('plan-pdfs').remove([filePath]);
+      }
+    } catch (error) {
+      console.error('PDF file deletion error:', error);
+      // ファイル削除に失敗してもデータベースからは削除する
+    }
 
-    if (!success) {
+    // 関連する図面を取得して削除
+    const { data: drawings } = await supabaseAdmin
+      .from('drawings')
+      .select('file_path')
+      .eq('plan_id', id);
+
+    if (drawings && drawings.length > 0) {
+      for (const drawing of drawings) {
+        try {
+          const filePathMatch = drawing.file_path.match(/plan-pdfs\/(.+)$/);
+          if (filePathMatch) {
+            await supabaseAdmin.storage.from('plan-pdfs').remove([filePathMatch[1]]);
+          }
+        } catch (error) {
+          console.error('Drawing file deletion error:', error);
+        }
+      }
+    }
+
+    // 関連する写真を取得して削除
+    const { data: photos } = await supabaseAdmin
+      .from('photos')
+      .select('file_path')
+      .eq('plan_id', id);
+
+    if (photos && photos.length > 0) {
+      for (const photo of photos) {
+        try {
+          const filePathMatch = photo.file_path.match(/plan-pdfs\/(.+)$/);
+          if (filePathMatch) {
+            await supabaseAdmin.storage.from('plan-pdfs').remove([filePathMatch[1]]);
+          }
+        } catch (error) {
+          console.error('Photo file deletion error:', error);
+        }
+      }
+    }
+
+    // データベースから削除（カスケード削除により関連データも削除される）
+    const { error: deleteError } = await supabaseAdmin
+      .from('plans')
+      .delete()
+      .eq('id', id);
+
+    if (deleteError) {
+      console.error('Plan deletion error:', deleteError);
       return NextResponse.json(
         { error: 'プランの削除に失敗しました' },
         { status: 500 }
