@@ -100,7 +100,6 @@ export async function GET(request: NextRequest) {
     // 特徴で絞り込み（JSONBの配列に含まれているか）
     // 選択されたすべての特徴を持つプランのみを返す（AND条件）
     const featuresStr = searchParams.get('features');
-    console.log('🔍 [FEATURES] featuresStr:', featuresStr);
     if (featuresStr && featuresStr.trim()) {
       // 空白をトリムして配列を作成
       const features = featuresStr
@@ -108,16 +107,11 @@ export async function GET(request: NextRequest) {
         .map(f => f.trim())
         .filter(f => f.length > 0);
 
-      console.log('🔍 [FEATURES] Parsed features array:', features);
-
       if (features.length > 0) {
-        // PostgreSQLの@>演算子を使用して、指定されたすべての特徴を含むプランを検索
-        // 各特徴に対してfilterを個別に適用することでAND条件を実現
-        // JSON.stringifyを使用して日本語文字を正しくエンコード
+        // Supabaseのcontainsメソッドを使用して、指定されたすべての特徴を含むプランを検索
+        // 各特徴に対してcontainsを個別に適用することでAND条件を実現
         features.forEach(feature => {
-          const encodedFeature = JSON.stringify([feature]);
-          console.log('🔍 [FEATURES] Applying filter for:', feature, '| Encoded:', encodedFeature);
-          query = query.filter('features', '@>', encodedFeature);
+          query = query.contains('features', [feature]);
         });
       }
     }
