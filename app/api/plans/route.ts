@@ -107,10 +107,11 @@ export async function GET(request: NextRequest) {
       console.log('🔍 Parsed and trimmed features array:', features);
       if (features.length > 0) {
         // PostgreSQLの@>演算子を使用して、指定されたすべての特徴を含むプランを検索
-        // 各特徴に対してcontainsを個別に適用することでAND条件を実現
+        // 各特徴に対してfilterを個別に適用することでAND条件を実現
+        // JSON.stringifyを使用して日本語文字を正しくエンコード
         for (const feature of features) {
           console.log('🔍 Applying filter for feature:', feature);
-          query = query.contains('features', [feature]);
+          query = query.filter('features', '@>', JSON.stringify([feature]));
         }
       }
     }
