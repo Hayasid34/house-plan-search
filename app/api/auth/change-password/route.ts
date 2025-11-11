@@ -1,12 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getUsernameFromRequest } from '@/lib/auth';
-import { authenticateUser, updateUserPasswordByUsername } from '@/lib/users';
+import { createClient } from '@supabase/supabase-js';
+import { cookies } from 'next/headers';
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 
 export async function POST(request: NextRequest) {
   try {
-    // セッションからユーザー名を取得
-    const username = getUsernameFromRequest(request);
-    if (!username) {
+    // Supabaseクライアントを作成
+    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+    // 認証トークンを取得
+    const cookieStore = await cookies();
+    const authToken = cookieStore.get('supabase-auth-token');
+
+    if (!authToken) {
       return NextResponse.json(
         { error: 'ログインが必要です' },
         { status: 401 }
@@ -30,9 +38,23 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 現在のパスワードを検証
-    const user = authenticateUser(username, currentPassword);
-    if (!user) {
+    // ユーザー情報を取得
+    const { data: { user }, error: authError } = await supabase.auth.getUser(authToken.value);
+
+    if (authError || !user) {
+      return NextResponse.json(
+        { error: 'ログインが必要です' },
+        { status: 401 }
+      );
+    }
+
+    // 現在のパスワードで再認証
+    const { error: signInError } = await supabase.auth.signInWithPassword({
+      email: user.email!,
+      password: currentPassword,
+    });
+
+    if (signInError) {
       return NextResponse.json(
         { error: '現在のパスワードが正しくありません' },
         { status: 401 }
@@ -40,11 +62,15 @@ export async function POST(request: NextRequest) {
     }
 
     // パスワードを更新
-    const success = updateUserPasswordByUsername(username, newPassword);
-    if (!success) {
+    const { error: updateError } = await supabase.auth.updateUser({
+      password: newPassword,
+    });
+
+    if (updateError) {
+      console.error('Password update error:', updateError);
       return NextResponse.json(
-        { error: 'ユーザーが見つかりません' },
-        { status: 404 }
+        { error: 'パスワードの更新に失敗しました' },
+        { status: 500 }
       );
     }
 
