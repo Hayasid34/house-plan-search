@@ -98,12 +98,20 @@ export async function GET(request: NextRequest) {
     }
 
     // 特徴で絞り込み（JSONBの配列に含まれているか）
+    // 選択されたすべての特徴を持つプランのみを返す（AND条件）
     const featuresStr = searchParams.get('features');
     if (featuresStr) {
       const features = featuresStr.split(',').filter(f => f.trim());
-      features.forEach(feature => {
-        query = query.contains('features', [feature]);
-      });
+      if (features.length > 0) {
+        // すべての特徴を一度に渡すことで、完全一致を保証
+        query = query.contains('features', features);
+      }
+    }
+
+    // お気に入りで絞り込み
+    const favoriteOnly = searchParams.get('favoriteOnly');
+    if (favoriteOnly === 'true') {
+      query = query.eq('favorite', true);
     }
 
     // クエリを実行
