@@ -102,14 +102,16 @@ export async function GET(request: NextRequest) {
     const featuresStr = searchParams.get('features');
     console.log('🔍 Features query param:', featuresStr);
     if (featuresStr) {
-      const features = featuresStr.split(',').filter(f => f.trim());
-      console.log('🔍 Parsed features array:', features);
+      // 空白をトリムして配列を作成
+      const features = featuresStr.split(',').map(f => f.trim()).filter(f => f);
+      console.log('🔍 Parsed and trimmed features array:', features);
       if (features.length > 0) {
-        // 各特徴に対して個別にcontainsを適用（AND条件）
-        features.forEach(feature => {
-          console.log('🔍 Applying contains filter for:', feature);
+        // PostgreSQLの@>演算子を使用して、指定されたすべての特徴を含むプランを検索
+        // 各特徴に対してcontainsを個別に適用することでAND条件を実現
+        for (const feature of features) {
+          console.log('🔍 Applying filter for feature:', feature);
           query = query.contains('features', [feature]);
-        });
+        }
       }
     }
 
