@@ -528,7 +528,11 @@ export default function Home() {
                   {/* PDF表示エリア */}
                   <div className="mt-6">
                     <h3 className="text-lg font-bold text-text-primary mb-3">図面プレビュー</h3>
-                    <div className="bg-bg-soft border-2 border-line-focused rounded-lg overflow-hidden">
+                    {/* 元のファイル名を表示 */}
+                    <div className="bg-dw-blue text-white px-4 py-3 rounded-t-lg font-medium">
+                      📄 {selectedPlan.originalFilename || selectedPlan.title + '.pdf'}
+                    </div>
+                    <div className="bg-bg-soft border-2 border-t-0 border-line-focused rounded-b-lg overflow-hidden">
                       <iframe
                         src={selectedPlan.pdfPath}
                         className="w-full h-[75vh]"
