@@ -56,6 +56,7 @@ export default function ChangePasswordPage() {
         headers: {
           'Content-Type': 'application/json',
         },
+        credentials: 'include',
         body: JSON.stringify({
           currentPassword,
           newPassword,
