@@ -74,10 +74,10 @@ export async function POST(request: NextRequest) {
 
     // PDFファイルをSupabase Storageにアップロード（サービスロールキーを使用）
     const timestamp = Date.now();
-    // ファイル名をURLセーフに変換（日本語や特殊文字を削除）
+    // ファイル名をURLセーフに変換（日本語は保持、パス区切りやクエリ文字のみ置き換え）
     const safeFileName = file.name
-      .replace(/[^\w\s.-]/gi, '_') // 特殊文字をアンダースコアに置き換え
-      .replace(/\s+/g, '_');         // スペースをアンダースコアに置き換え
+      .replace(/[\/\\\?#&=\+%]/g, '_') // URLで問題となる特殊文字のみ置き換え
+      .replace(/\s+/g, '_');            // スペースをアンダースコアに置き換え
     const fileName = `${timestamp}_${safeFileName}`;
     const fileBuffer = await file.arrayBuffer();
 
