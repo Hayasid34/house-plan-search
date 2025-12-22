@@ -1,12 +1,14 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import Image from 'next/image';
 
 interface PDFThumbnailProps {
   pdfPath: string;
+  thumbnailPath?: string;
 }
 
-export default function PDFThumbnail({ pdfPath }: PDFThumbnailProps) {
+export default function PDFThumbnail({ pdfPath, thumbnailPath }: PDFThumbnailProps) {
   const [hasError, setHasError] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isVisible, setIsVisible] = useState(false);
@@ -24,7 +26,7 @@ export default function PDFThumbnail({ pdfPath }: PDFThumbnailProps) {
         });
       },
       {
-        rootMargin: '100px', // 100px手前から読み込み開始
+        rootMargin: '200px', // 200px手前から読み込み開始（さらに早めに）
         threshold: 0.01
       }
     );
@@ -53,7 +55,7 @@ export default function PDFThumbnail({ pdfPath }: PDFThumbnailProps) {
         <svg className="mx-auto h-12 w-12 text-icon-disable" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
         </svg>
-        <p className="mt-2 text-sm">プレビュー読込失敗</p>
+        <p className="mt-2 text-sm text-text-disable">プレビュー読込失敗</p>
       </div>
     );
   }
@@ -70,34 +72,37 @@ export default function PDFThumbnail({ pdfPath }: PDFThumbnailProps) {
       ) : (
         <>
           {isLoading && (
-            <div className="absolute inset-0 flex items-center justify-center">
+            <div className="absolute inset-0 flex items-center justify-center bg-bg-soft z-10">
               <div className="text-center">
                 <div className="inline-block animate-spin rounded-full h-8 w-8 border-4 border-dw-blue border-t-transparent"></div>
-                <p className="mt-2 text-sm">読込中...</p>
+                <p className="mt-2 text-sm text-text-sub">読込中...</p>
               </div>
             </div>
           )}
-          <object
-            data={`${pdfPath}#page=1&view=FitH&toolbar=0&navpanes=0&scrollbar=0`}
-            type="application/pdf"
-            className="w-full h-full"
-            onLoad={handleLoad}
-            onError={handleError}
-            style={{
-              minHeight: '192px',
-              pointerEvents: 'none'
-            }}
-          >
-            <embed
-              src={`${pdfPath}#page=1&view=FitH&toolbar=0&navpanes=0&scrollbar=0`}
-              type="application/pdf"
-              className="w-full h-full"
+          {thumbnailPath ? (
+            // サムネイル画像がある場合は画像を表示（超高速！）
+            <img
+              src={thumbnailPath}
+              alt="Plan thumbnail"
+              className="w-full h-full object-contain"
+              onLoad={handleLoad}
+              onError={handleError}
+              loading="lazy"
               style={{
                 minHeight: '192px',
-                pointerEvents: 'none'
               }}
             />
-          </object>
+          ) : (
+            // サムネイルがない場合はフォールバック（PDFアイコン）
+            <div className="absolute inset-0 flex items-center justify-center">
+              <div className="text-center">
+                <svg className="mx-auto h-16 w-16 text-icon-disable" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                <p className="mt-2 text-xs text-text-disable">サムネイル未生成</p>
+              </div>
+            </div>
+          )}
         </>
       )}
     </div>

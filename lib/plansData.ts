@@ -26,6 +26,7 @@ export interface Plan {
   siteArea: number;
   features: string[];
   pdfPath: string;
+  thumbnailPath?: string; // PDFサムネイル画像パス
   originalFilename: string;
   drawings?: Drawing[]; // 追加図面
   photos?: Photo[]; // 写真

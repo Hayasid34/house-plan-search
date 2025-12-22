@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { cookies } from 'next/headers';
+import { generatePDFThumbnail } from '@/lib/pdfThumbnail';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -104,6 +105,39 @@ export async function POST(request: NextRequest) {
       .from('plan-pdfs')
       .getPublicUrl(fileName);
 
+    // サムネイルを生成
+    let thumbnailUrl: string | null = null;
+    try {
+      console.log('Generating PDF thumbnail...');
+      const thumbnailBuffer = await generatePDFThumbnail(fileBuffer, { width: 400 });
+
+      // サムネイルをStorageにアップロード
+      const thumbnailFileName = `${timestamp}_${safeFileName.replace('.pdf', '')}_thumb.png`;
+      const { data: thumbnailUploadData, error: thumbnailUploadError } = await supabaseAdmin
+        .storage
+        .from('plan-thumbnails')
+        .upload(thumbnailFileName, thumbnailBuffer, {
+          contentType: 'image/png',
+          upsert: false
+        });
+
+      if (thumbnailUploadError) {
+        console.error('Thumbnail upload error:', thumbnailUploadError);
+        // サムネイルアップロードが失敗してもPDFアップロードは続行
+      } else {
+        // サムネイルの公開URLを取得
+        const { data: { publicUrl: thumbPublicUrl } } = supabaseAdmin
+          .storage
+          .from('plan-thumbnails')
+          .getPublicUrl(thumbnailFileName);
+        thumbnailUrl = thumbPublicUrl;
+        console.log('Thumbnail generated successfully:', thumbnailUrl);
+      }
+    } catch (thumbnailError) {
+      console.error('Thumbnail generation error:', thumbnailError);
+      // サムネイル生成が失敗してもPDFアップロードは続行
+    }
+
     // plansテーブルにデータを保存（サービスロールキーを使用）
     const { data: newPlan, error: insertError } = await supabaseAdmin
       .from('plans')
@@ -118,6 +152,7 @@ export async function POST(request: NextRequest) {
         site_area: siteArea,
         features,
         pdf_path: publicUrl,
+        thumbnail_url: thumbnailUrl,
         original_filename: file.name,
         created_by: user.id
       })

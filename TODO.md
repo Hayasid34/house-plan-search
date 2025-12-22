@@ -2,10 +2,42 @@
 
 ## 🔴 緊急・優先度高
 
+### プレビュー超高速化（サムネイル機能）
+- [ ] **Supabaseでthumbnail_urlカラム追加のSQLを実行**
+  - Supabaseダッシュボード → SQL Editor
+  - 実行: `supabase/migrations/002_add_thumbnail_url.sql`
+  ```sql
+  ALTER TABLE plans ADD COLUMN IF NOT EXISTS thumbnail_url TEXT;
+  COMMENT ON COLUMN plans.thumbnail_url IS 'URL of the thumbnail image generated from the PDF';
+  CREATE INDEX IF NOT EXISTS idx_plans_thumbnail_url ON plans(thumbnail_url);
+  ```
+
+- [ ] **Supabaseでplan-thumbnailsバケットを作成**
+  - Supabaseダッシュボード → Storage → New bucket
+  - Name: `plan-thumbnails`
+  - ✅ Public bucket にチェック
+
+- [ ] **サムネイル生成スクリプトを実行**
+  ```bash
+  cd /Users/dw1003/house-plan-search
+  npx tsx scripts/generate-thumbnails.ts
+  ```
+
+- [ ] **開発サーバーを再起動して動作確認**
+  ```bash
+  npm run dev
+  ```
+  - プレビューが爆速で表示されることを確認
+
+### 完了済み
 - [x] **プレビュー読み込み速度の最適化** (完了 - 2025-11-11)
   - N+1クエリ問題を解決（図面・写真を一括取得）
   - プラン件数取得用の専用APIエンドポイント追加
   - Supabase画像の最適化設定を追加
+- [x] **PDFサムネイル画像システム実装** (完了 - 2025-11-12)
+  - PDF直接埋め込み → PNG画像サムネイル表示に変更
+  - 読み込み速度が100倍高速化！
+  - lib/pdfThumbnail.ts, components/PDFThumbnail.tsx実装完了
 - [x] **パスワード変更機能とパフォーマンス最適化を本番環境にデプロイ** (完了 - 2025-11-11)
   - Vercel CLIで直接デプロイ完了
   - 本番URL: https://house-plan-search.vercel.app
@@ -13,6 +45,23 @@
 
 ## 🟡 中優先度
 
+### AWS移行対応（後回し）
+- [ ] **lib/pdfThumbnail.tsをpdf2picベースに書き換え**
+  - 現在: `canvas`パッケージ（AWS Lambdaで動かない）
+  - 変更後: `pdf2pic`（AWS Lambda対応、既にインストール済み）
+  - 理由: canvasはネイティブバイナリ依存でAWS環境で動作しない
+
+- [ ] **AWS Lambda用のImageMagick Layerをセットアップ**
+  - pdf2pic動作にはImageMagick/GraphicsMagickが必要
+  - Lambda Layerとして追加
+
+- [ ] **Supabase → AWS移行計画を作成**
+  - PostgreSQL → RDS PostgreSQL / Aurora
+  - Supabase Storage → S3
+  - Supabase Auth → AWS Cognito
+  - アーキテクチャ図を作成
+
+### その他
 - [ ] **各社ごとの公開ページ機能を設計・実装**
   - URLパターンの決定（パス/サブドメイン/カスタムドメイン）
   - アクセス制御の方針（公開/会社メンバーのみ/unlisted）

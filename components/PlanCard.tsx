@@ -44,7 +44,7 @@ export default function PlanCard({ plan, onClick, onFavoriteToggle }: PlanCardPr
     >
       {/* サムネイル */}
       <div className="bg-bg-soft h-48 flex items-center justify-center text-text-disable overflow-hidden relative">
-        <PDFThumbnail pdfPath={plan.pdfPath} />
+        <PDFThumbnail pdfPath={plan.pdfPath} thumbnailPath={plan.thumbnailPath} />
         {/* お気に入りボタン */}
         {onFavoriteToggle && (
           <button

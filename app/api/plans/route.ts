@@ -185,6 +185,7 @@ export async function GET(request: NextRequest) {
       siteArea: plan.site_area,
       features: plan.features || [],
       pdfPath: plan.pdf_path,
+      thumbnailPath: plan.thumbnail_url, // サムネイル画像のパス
       originalFilename: plan.original_filename,
       favorite: plan.favorite || false,
       createdAt: plan.created_at,
