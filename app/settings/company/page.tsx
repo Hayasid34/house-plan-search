@@ -57,7 +57,7 @@ export default function CompanySettingsPage() {
         <div className="px-6 py-4">
           <div className="flex items-center justify-between">
             <button
-              onClick={() => router.push('/')}
+              onClick={() => router.push('/search')}
               className="flex items-center gap-4 hover:opacity-80 transition-opacity cursor-pointer"
             >
               <img
@@ -75,7 +75,7 @@ export default function CompanySettingsPage() {
             </button>
             <div className="flex items-center gap-3">
               <button
-                onClick={() => router.push('/')}
+                onClick={() => router.push('/search')}
                 className="border border-line-separator hover:bg-bg-soft text-text-sub hover:text-text-primary font-medium px-4 py-2 rounded-lg flex items-center gap-2 transition-colors"
               >
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">

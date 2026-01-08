@@ -7,6 +7,21 @@ const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 // ローカルテスト用のデモアカウント
 const DEMO_ACCOUNTS = [
   {
+    username: 'demo',
+    password: 'demo123',
+    user: {
+      id: 'demo-user-0',
+      email: 'demo@example.com',
+      name: 'デモユーザー',
+      role: 'viewer',
+      company: {
+        id: 'demo-company-1',
+        name: 'デモ株式会社',
+        cst_number: 'CST001'
+      }
+    }
+  },
+  {
     username: 'admin@test.com',
     password: 'password123',
     user: {
@@ -69,18 +84,9 @@ export async function POST(request: NextRequest) {
       });
 
       if (error || !data.user || !data.session) {
-        // ネットワークエラーの場合はローカル認証にフォールバック
-        if (error && (error.message.includes('fetch failed') || error.message.includes('ENOTFOUND'))) {
-          console.log('[LOGIN] Supabase unavailable, using local auth');
-          useLocalAuth = true;
-        } else {
-          console.error('[LOGIN] Supabase auth error:', error);
-          console.error('[LOGIN] Error details:', JSON.stringify(error, null, 2));
-          return NextResponse.json(
-            { error: 'ユーザー名またはパスワードが正しくありません' },
-            { status: 401 }
-          );
-        }
+        // Supabase認証失敗時はローカル認証にフォールバック
+        console.log('[LOGIN] Supabase auth failed, trying local auth. Error:', error?.message);
+        useLocalAuth = true;
       } else {
         // Supabase認証成功
         console.log('[LOGIN] Auth successful for user:', data.user.id);

@@ -6,6 +6,9 @@ import dynamicImport from 'next/dynamic';
 import Konva from 'konva';
 import * as pdfjsLib from 'pdfjs-dist';
 import jsPDF from 'jspdf';
+import { PREFECTURES, getCitiesByPrefecture, getCityById, getOazasByCity, type City, type Oaza, type ZoningDistrict } from '@/lib/zoningData';
+import { FLOOR_PLANS, getFloorPlanById, type FloorPlan } from '@/lib/floorPlanData';
+import { getCustomFloorPlans, saveCustomFloorPlan, deleteCustomFloorPlan, imageToBase64 } from '@/lib/customFloorPlans';
 
 // SitePlanCanvasを動的インポートして、SSRをスキップ
 const SitePlanCanvas = dynamicImport(() => import('@/components/SitePlanCanvas'), {
@@ -49,6 +52,8 @@ interface Building {
   widthMm: number;
   depthMm: number;
   tsubo: number;
+  rotation: number; // 0, 90, 180, 270
+  imagePath?: string; // 間取り画像のパス
 }
 
 interface Parking {
@@ -90,12 +95,54 @@ export default function SitePlanPage() {
   const [depthKen, setDepthKen] = useState<number>(5);
   const [parkingType, setParkingType] = useState<ParkingType>('normal');
 
+  // 用途地域検索用
+  const [selectedPrefecture, setSelectedPrefecture] = useState<string>('');
+  const [selectedCityId, setSelectedCityId] = useState<string>('');
+  const [selectedOazaId, setSelectedOazaId] = useState<string>('');
+  const [availableCities, setAvailableCities] = useState<City[]>([]);
+  const [availableOazas, setAvailableOazas] = useState<Oaza[]>([]);
+  const [selectedOaza, setSelectedOaza] = useState<Oaza | null>(null);
+  const [addressInput, setAddressInput] = useState<string>('');
+
   // 建物編集用
   const [editWidthKen, setEditWidthKen] = useState<number>(5);
   const [editDepthKen, setEditDepthKen] = useState<number>(5);
 
+  // 間取りプラン用
+  const [selectedFloorPlanId, setSelectedFloorPlanId] = useState<string>('');
+  const [selectedFloorPlan, setSelectedFloorPlan] = useState<FloorPlan | null>(null);
+  const [customFloorPlans, setCustomFloorPlans] = useState<FloorPlan[]>([]);
+  const [allFloorPlans, setAllFloorPlans] = useState<FloorPlan[]>(FLOOR_PLANS);
+
+  // カスタムプラン追加フォーム
+  const [showAddPlanForm, setShowAddPlanForm] = useState<boolean>(false);
+  const [newPlanName, setNewPlanName] = useState<string>('');
+  const [newPlanDescription, setNewPlanDescription] = useState<string>('');
+  const [newPlanWidthKen, setNewPlanWidthKen] = useState<number>(5);
+  const [newPlanDepthKen, setNewPlanDepthKen] = useState<number>(5);
+  const [newPlanCategory, setNewPlanCategory] = useState<'2LDK' | '3LDK' | '4LDK' | 'その他'>('3LDK');
+  const [newPlanFloors, setNewPlanFloors] = useState<number>(2);
+  const [newPlanImage, setNewPlanImage] = useState<File | null>(null);
+  const [newPlanImagePreview, setNewPlanImagePreview] = useState<string>('');
+
   // Canvas設定
   const [stageSize, setStageSize] = useState({ width: 800, height: 600 });
+
+  // サイドバー表示制御
+  const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(true);
+
+  // アンドゥ・リドゥ用の履歴管理
+  interface HistoryState {
+    buildings: Building[];
+    parkings: Parking[];
+    siteBoundary: SiteBoundary | null;
+  }
+  const MAX_HISTORY = 50; // 最大履歴数
+  const [history, setHistory] = useState<HistoryState[]>([
+    { buildings: [], parkings: [], siteBoundary: null }
+  ]);
+  const [historyIndex, setHistoryIndex] = useState<number>(0);
+  const [isUndoRedoAction, setIsUndoRedoAction] = useState<boolean>(false); // アンドゥ・リドゥ実行中フラグ
 
   // mmをピクセルに変換
   const mmToPixel = (mm: number): number => {
@@ -130,6 +177,86 @@ export default function SitePlanPage() {
     return {
       x: sumX / numPoints,
       y: sumY / numPoints
+    };
+  };
+
+  // 多角形の面積を計算（Shoelace formula）
+  const calculatePolygonArea = (points: number[]): number => {
+    let area = 0;
+    const n = points.length / 2;
+
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n;
+      const x1 = points[i * 2];
+      const y1 = points[i * 2 + 1];
+      const x2 = points[j * 2];
+      const y2 = points[j * 2 + 1];
+      area += x1 * y2 - x2 * y1;
+    }
+
+    return Math.abs(area / 2);
+  };
+
+  // ピクセル面積を実面積（m²）に変換
+  const pixelAreaToM2 = (pixelArea: number): number => {
+    if (pixelToMmRatio !== null) {
+      // キャリブレーション済みの場合
+      const mmPerPixel = 1 / pixelToMmRatio;
+      const areaMm2 = pixelArea * mmPerPixel * mmPerPixel;
+      return areaMm2 / 1000000; // mm² → m²
+    }
+
+    // デフォルト：1/100縮尺
+    const mmPerPixel = (SCALE_1_100 * MM_PER_INCH) / PDF_DPI / PDF_RENDER_SCALE;
+    const areaMm2 = pixelArea * mmPerPixel * mmPerPixel;
+    return areaMm2 / 1000000; // mm² → m²
+  };
+
+  // 建蔽率・容積率を計算
+  const calculateCoverageRatio = (): {
+    siteArea: number;
+    buildingArea: number;
+    totalFloorArea: number;
+    coverageRatio: number;
+    floorAreaRatio: number;
+    isValidCoverage: boolean;
+    isValidFloorArea: boolean;
+  } | null => {
+    if (!siteBoundary || buildings.length === 0) {
+      return null;
+    }
+
+    // 敷地面積（ピクセル）
+    const siteAreaPixel = calculatePolygonArea(siteBoundary.points);
+    const siteArea = pixelAreaToM2(siteAreaPixel);
+
+    // 建築面積（すべての建物の1階面積の合計）
+    const buildingAreaMm2 = buildings.reduce((sum, building) => {
+      return sum + (building.widthMm * building.depthMm);
+    }, 0);
+    const buildingArea = buildingAreaMm2 / 1000000; // mm² → m²
+
+    // 延床面積（各建物の面積 × 2階建て）
+    const totalFloorArea = buildingArea * 2;
+
+    // 建蔽率（%）
+    const coverageRatio = (buildingArea / siteArea) * 100;
+
+    // 容積率（%）
+    const floorAreaRatio = (totalFloorArea / siteArea) * 100;
+
+    // 用途地域の制限値と比較
+    const maxCoverage = selectedOaza?.zoningDistrict.buildingCoverageRatio || 100;
+    const maxFloorArea = selectedOaza?.zoningDistrict.floorAreaRatio || 100;
+
+    return {
+      siteArea,
+      buildingArea,
+      totalFloorArea,
+      coverageRatio,
+      floorAreaRatio,
+      isValidCoverage: coverageRatio <= maxCoverage,
+      isValidFloorArea: floorAreaRatio <= maxFloorArea,
     };
   };
 
@@ -267,6 +394,7 @@ export default function SitePlanPage() {
       widthMm,
       depthMm,
       tsubo,
+      rotation: 0,
     };
 
     console.log('新しい建物を追加:', newBuilding);
@@ -298,6 +426,50 @@ export default function SitePlanPage() {
     setParkings([...parkings, newParking]);
   };
 
+  // 間取りプランから建物を追加
+  const handleAddBuildingFromFloorPlan = () => {
+    console.log('[DEBUG] handleAddBuildingFromFloorPlan called');
+    console.log('[DEBUG] siteBoundary:', siteBoundary);
+    console.log('[DEBUG] selectedFloorPlan:', selectedFloorPlan);
+
+    if (!siteBoundary) {
+      alert('先に敷地境界を設定してください');
+      return;
+    }
+
+    if (!selectedFloorPlan) {
+      alert('間取りプランを選択してください');
+      return;
+    }
+
+    const widthMm = selectedFloorPlan.widthMm;
+    const depthMm = selectedFloorPlan.depthMm;
+    const tsubo = selectedFloorPlan.tsubo;
+
+    // 多角形の重心に配置
+    const center = getPolygonCenter(siteBoundary.points);
+    console.log('[DEBUG] center:', center);
+
+    const newBuilding: Building = {
+      id: `building-${Date.now()}`,
+      x: center.x - mmToPixel(widthMm) / 2,
+      y: center.y - mmToPixel(depthMm) / 2,
+      widthKen: selectedFloorPlan.widthKen,
+      depthKen: selectedFloorPlan.depthKen,
+      widthMm,
+      depthMm,
+      tsubo,
+      rotation: 0,
+      imagePath: selectedFloorPlan.imagePath, // 間取り画像のパスを保存
+    };
+
+    console.log('間取りプランから建物を追加:', newBuilding);
+    console.log('[DEBUG] current buildings:', buildings);
+    const updatedBuildings = [...buildings, newBuilding];
+    console.log('[DEBUG] updated buildings:', updatedBuildings);
+    setBuildings(updatedBuildings);
+  };
+
   // 選択された建物が変わったら、編集フォームを更新
   useEffect(() => {
     if (selectedId && selectedId.startsWith('building-')) {
@@ -309,16 +481,235 @@ export default function SitePlanPage() {
     }
   }, [selectedId, buildings]);
 
+  // 都道府県が選択されたら市区町村リストを更新
+  useEffect(() => {
+    if (selectedPrefecture) {
+      const cities = getCitiesByPrefecture(selectedPrefecture);
+      console.log('[ZONING] Selected prefecture:', selectedPrefecture, 'Cities:', cities);
+      setAvailableCities(cities);
+      setSelectedCityId('');
+      setSelectedOazaId('');
+      setAvailableOazas([]);
+      setSelectedOaza(null);
+    } else {
+      setAvailableCities([]);
+      setSelectedCityId('');
+      setSelectedOazaId('');
+      setAvailableOazas([]);
+      setSelectedOaza(null);
+    }
+  }, [selectedPrefecture]);
+
+  // 市区町村が選択されたら大字リストを更新
+  useEffect(() => {
+    if (selectedCityId) {
+      console.log('[ZONING] Selected city ID:', selectedCityId);
+      const oazas = getOazasByCity(selectedCityId);
+      console.log('[ZONING] Found oazas:', oazas);
+      setAvailableOazas(oazas);
+      setSelectedOazaId('');
+      setSelectedOaza(null);
+    } else {
+      setAvailableOazas([]);
+      setSelectedOazaId('');
+      setSelectedOaza(null);
+    }
+  }, [selectedCityId]);
+
+  // 大字が選択されたら詳細情報を表示
+  useEffect(() => {
+    if (selectedOazaId && selectedCityId) {
+      console.log('[ZONING] Selected oaza ID:', selectedOazaId);
+      const oaza = availableOazas.find(o => o.id === selectedOazaId);
+      console.log('[ZONING] Found oaza:', oaza);
+      setSelectedOaza(oaza || null);
+    } else {
+      setSelectedOaza(null);
+    }
+  }, [selectedOazaId, selectedCityId, availableOazas]);
+
+  // 間取りプランが選択されたら詳細情報を表示
+  useEffect(() => {
+    if (selectedFloorPlanId) {
+      console.log('[FLOOR_PLAN] Selected floor plan ID:', selectedFloorPlanId);
+      const plan = allFloorPlans.find(p => p.id === selectedFloorPlanId);
+      console.log('[FLOOR_PLAN] Found floor plan:', plan);
+      setSelectedFloorPlan(plan || null);
+    } else {
+      setSelectedFloorPlan(null);
+    }
+  }, [selectedFloorPlanId, allFloorPlans]);
+
+  // コンポーネントマウント時にカスタムプランを読み込み
+  useEffect(() => {
+    const loadCustomPlans = () => {
+      const customPlans = getCustomFloorPlans();
+      setCustomFloorPlans(customPlans);
+      setAllFloorPlans([...FLOOR_PLANS, ...customPlans]);
+    };
+    loadCustomPlans();
+  }, []);
+
+  // buildingsの状態変化を監視
+  useEffect(() => {
+    console.log('[DEBUG] buildings updated:', buildings);
+    console.log('[DEBUG] buildings count:', buildings.length);
+  }, [buildings]);
+
+  // 履歴を保存
+  const saveHistory = () => {
+    if (isUndoRedoAction) return; // アンドゥ・リドゥ実行中は履歴を保存しない
+
+    const newState: HistoryState = {
+      buildings: JSON.parse(JSON.stringify(buildings)),
+      parkings: JSON.parse(JSON.stringify(parkings)),
+      siteBoundary: siteBoundary ? JSON.parse(JSON.stringify(siteBoundary)) : null,
+    };
+
+    // 現在のインデックスより後の履歴を削除し、新しい履歴を追加
+    const newHistory = history.slice(0, historyIndex + 1);
+    newHistory.push(newState);
+
+    // 最大履歴数を超える場合は古い履歴を削除
+    if (newHistory.length > MAX_HISTORY) {
+      newHistory.shift();
+    } else {
+      setHistoryIndex(newHistory.length - 1);
+    }
+
+    setHistory(newHistory);
+  };
+
+  // buildings, parkings, siteBoundary の変更を監視して履歴に保存
+  useEffect(() => {
+    if (!isUndoRedoAction) {
+      saveHistory();
+    }
+  }, [buildings, parkings, siteBoundary]);
+
+  // アンドゥ
+  const handleUndo = () => {
+    if (historyIndex > 0) {
+      setIsUndoRedoAction(true);
+      const prevIndex = historyIndex - 1;
+      const prevState = history[prevIndex];
+
+      setBuildings(prevState.buildings);
+      setParkings(prevState.parkings);
+      setSiteBoundary(prevState.siteBoundary);
+      setHistoryIndex(prevIndex);
+
+      // 次のレンダリング後にフラグをリセット
+      setTimeout(() => setIsUndoRedoAction(false), 0);
+    }
+  };
+
+  // リドゥ
+  const handleRedo = () => {
+    if (historyIndex < history.length - 1) {
+      setIsUndoRedoAction(true);
+      const nextIndex = historyIndex + 1;
+      const nextState = history[nextIndex];
+
+      setBuildings(nextState.buildings);
+      setParkings(nextState.parkings);
+      setSiteBoundary(nextState.siteBoundary);
+      setHistoryIndex(nextIndex);
+
+      // 次のレンダリング後にフラグをリセット
+      setTimeout(() => setIsUndoRedoAction(false), 0);
+    }
+  };
+
+  // キーボードショートカット（Ctrl+Z / Ctrl+Y）
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      // Mac: Cmd+Z / Cmd+Shift+Z, Windows/Linux: Ctrl+Z / Ctrl+Y
+      const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+      const isCtrlOrCmd = isMac ? event.metaKey : event.ctrlKey;
+
+      if (isCtrlOrCmd && event.key === 'z' && !event.shiftKey) {
+        event.preventDefault();
+        handleUndo();
+      } else if (
+        (isCtrlOrCmd && event.key === 'y') || // Windows/Linux: Ctrl+Y
+        (isMac && event.metaKey && event.shiftKey && event.key === 'z') // Mac: Cmd+Shift+Z
+      ) {
+        event.preventDefault();
+        handleRedo();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [historyIndex, history]);
+
+  // 住所から都道府県・市区町村・大字を検索
+  const handleAddressSearch = () => {
+    if (!addressInput.trim()) {
+      alert('住所を入力してください');
+      return;
+    }
+
+    // 都道府県を検索
+    const prefecture = PREFECTURES.find(pref => addressInput.includes(pref));
+
+    if (!prefecture) {
+      alert('都道府県が見つかりませんでした。\n例: 東京都渋谷区道玄坂、神奈川県横浜市中区山下町');
+      return;
+    }
+
+    setSelectedPrefecture(prefecture);
+
+    // 市区町村を検索
+    const cities = getCitiesByPrefecture(prefecture);
+    const foundCity = cities.find(city => addressInput.includes(city.name));
+
+    if (foundCity) {
+      setSelectedCityId(foundCity.id);
+
+      // 大字を検索
+      const oazas = getOazasByCity(foundCity.id);
+      const foundOaza = oazas.find(oaza => addressInput.includes(oaza.name));
+
+      if (foundOaza) {
+        setSelectedOazaId(foundOaza.id);
+        setSelectedOaza(foundOaza);
+      } else {
+        // 大字が見つからない場合は市区町村まで設定
+        alert(`${foundCity.name}の大字が見つかりませんでした。\n登録されている大字: ${oazas.map(o => o.name).join('、')}`);
+      }
+    } else {
+      alert(`${prefecture}の市区町村が見つかりませんでした。\n登録されている市区町村: ${cities.map(c => c.name).join('、')}`);
+    }
+  };
+
   // 駐車場を回転（90度ずつ、360度で0に戻る）
-  const handleRotateParking = () => {
-    if (!selectedId || !selectedId.startsWith('parking-')) return;
+  const handleRotateParking = (parkingId?: string) => {
+    const targetId = parkingId || selectedId;
+    if (!targetId || !targetId.startsWith('parking-')) return;
 
     const updatedParkings = parkings.map((p) =>
-      p.id === selectedId
+      p.id === targetId
         ? { ...p, rotation: (p.rotation + 90) % 360 }
         : p
     );
     setParkings(updatedParkings);
+  };
+
+  // 建物を回転（90度ずつ、360度で0に戻る）
+  const handleRotateBuilding = (buildingId?: string) => {
+    const targetId = buildingId || selectedId;
+    if (!targetId || !targetId.startsWith('building-')) return;
+
+    const updatedBuildings = buildings.map((b) =>
+      b.id === targetId
+        ? { ...b, rotation: (b.rotation + 90) % 360 }
+        : b
+    );
+    setBuildings(updatedBuildings);
   };
 
   // 建物のサイズを変更
@@ -577,6 +968,118 @@ export default function SitePlanPage() {
     }
   };
 
+  // 画像ファイル選択時のプレビュー
+  const handleImageSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      alert('画像ファイルを選択してください');
+      return;
+    }
+
+    setNewPlanImage(file);
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      setNewPlanImagePreview(e.target?.result as string);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  // カスタムプランを追加
+  const handleAddCustomPlan = async () => {
+    // バリデーション
+    if (!newPlanName.trim()) {
+      alert('プラン名を入力してください');
+      return;
+    }
+
+    if (newPlanWidthKen <= 0 || newPlanDepthKen <= 0) {
+      alert('間口と奥行は0より大きい値を入力してください');
+      return;
+    }
+
+    if (!newPlanImage) {
+      alert('間取り画像を選択してください');
+      return;
+    }
+
+    try {
+      // 画像をBase64に変換
+      const imageBase64 = await imageToBase64(newPlanImage);
+
+      // 新しいプランを作成
+      const widthMm = newPlanWidthKen * KEN_TO_MM;
+      const depthMm = newPlanDepthKen * KEN_TO_MM;
+      const tsubo = calculateTsubo(widthMm, depthMm) * newPlanFloors;
+
+      const newPlan: FloorPlan = {
+        id: `custom-${Date.now()}`,
+        name: newPlanName,
+        description: newPlanDescription,
+        widthKen: newPlanWidthKen,
+        depthKen: newPlanDepthKen,
+        widthMm,
+        depthMm,
+        tsubo,
+        category: newPlanCategory,
+        imagePath: imageBase64,
+        floors: newPlanFloors,
+      };
+
+      // localStorageに保存
+      saveCustomFloorPlan(newPlan);
+
+      // 状態を更新
+      const updatedCustomPlans = [...customFloorPlans, newPlan];
+      setCustomFloorPlans(updatedCustomPlans);
+      setAllFloorPlans([...FLOOR_PLANS, ...updatedCustomPlans]);
+
+      // フォームをリセット
+      setShowAddPlanForm(false);
+      setNewPlanName('');
+      setNewPlanDescription('');
+      setNewPlanWidthKen(5);
+      setNewPlanDepthKen(5);
+      setNewPlanCategory('3LDK');
+      setNewPlanFloors(2);
+      setNewPlanImage(null);
+      setNewPlanImagePreview('');
+
+      alert('カスタムプランを追加しました');
+    } catch (error) {
+      console.error('カスタムプラン追加エラー:', error);
+      alert('カスタムプランの追加に失敗しました');
+    }
+  };
+
+  // カスタムプランを削除
+  const handleDeleteCustomPlan = (planId: string) => {
+    if (!confirm('このカスタムプランを削除しますか？')) {
+      return;
+    }
+
+    try {
+      deleteCustomFloorPlan(planId);
+
+      // 状態を更新
+      const updatedCustomPlans = customFloorPlans.filter(p => p.id !== planId);
+      setCustomFloorPlans(updatedCustomPlans);
+      setAllFloorPlans([...FLOOR_PLANS, ...updatedCustomPlans]);
+
+      // 選択中のプランだった場合はクリア
+      if (selectedFloorPlanId === planId) {
+        setSelectedFloorPlanId('');
+        setSelectedFloorPlan(null);
+      }
+
+      alert('カスタムプランを削除しました');
+    } catch (error) {
+      console.error('カスタムプラン削除エラー:', error);
+      alert('カスタムプランの削除に失敗しました');
+    }
+  };
+
   return (
     <div className="min-h-screen bg-bg-light">
       {/* ヘッダー */}
@@ -598,6 +1101,29 @@ export default function SitePlanPage() {
               </div>
             </div>
             <div className="flex items-center gap-3">
+              {/* アンドゥ・リドゥボタン */}
+              <button
+                onClick={handleUndo}
+                disabled={historyIndex === 0}
+                className="bg-gray-600 hover:bg-gray-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-medium px-4 py-2 rounded-lg flex items-center gap-2 transition-colors"
+                title="元に戻す (Ctrl+Z / Cmd+Z)"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+                </svg>
+                元に戻す
+              </button>
+              <button
+                onClick={handleRedo}
+                disabled={historyIndex === history.length - 1}
+                className="bg-gray-600 hover:bg-gray-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-medium px-4 py-2 rounded-lg flex items-center gap-2 transition-colors"
+                title="やり直す (Ctrl+Y / Cmd+Shift+Z)"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 10h-10a8 8 0 00-8 8v2M21 10l-6 6m6-6l-6-6" />
+                </svg>
+                やり直す
+              </button>
               <button
                 onClick={handleClearSitePlan}
                 className="bg-red-500 hover:bg-red-600 text-white font-medium px-4 py-2 rounded-lg flex items-center gap-2 transition-colors"
@@ -656,7 +1182,7 @@ export default function SitePlanPage() {
             <ul className="space-y-2">
               <li>
                 <button
-                  onClick={() => router.push('/')}
+                  onClick={() => router.push('/search')}
                   className="w-full flex items-center gap-3 px-4 py-3 text-left text-text-sub hover:bg-bg-soft hover:text-text-primary rounded-lg transition-colors font-medium"
                 >
                   <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -684,7 +1210,110 @@ export default function SitePlanPage() {
         <main className="flex-1 p-6">
         <div className="grid grid-cols-12 gap-6">
           {/* 左サイドバー - コントロール */}
+          {isSidebarOpen && (
           <div className="col-span-3 space-y-4">
+            {/* 用途地域検索 */}
+            <div className="bg-white rounded-lg p-4 border border-line-separator">
+              <h2 className="font-bold text-lg mb-4 flex items-center gap-2">
+                <svg className="w-6 h-6 text-accent-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+                </svg>
+                0. 用途地域検索
+              </h2>
+              <div className="space-y-3">
+                {/* 住所入力 */}
+                <div>
+                  <label className="block text-sm font-medium mb-1">住所で検索</label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={addressInput}
+                      onChange={(e) => setAddressInput(e.target.value)}
+                      onKeyPress={(e) => e.key === 'Enter' && handleAddressSearch()}
+                      placeholder="例: 東京都渋谷区道玄坂"
+                      className="flex-1 px-3 py-2 border border-line-separator rounded-lg text-sm"
+                    />
+                    <button
+                      onClick={handleAddressSearch}
+                      className="px-4 py-2 bg-accent-primary text-white rounded-lg hover:bg-accent-hover text-sm whitespace-nowrap"
+                    >
+                      検索
+                    </button>
+                  </div>
+                  <p className="text-xs text-text-sub mt-1">
+                    住所を入力すると自動的に用途地域を表示します
+                  </p>
+                </div>
+
+                <div className="border-t border-line-separator pt-3 mt-3">
+                  <p className="text-xs text-text-sub mb-2">または手動で選択：</p>
+
+                  {/* 都道府県選択 */}
+                  <div className="mb-2">
+                    <label className="block text-xs font-medium mb-1">都道府県</label>
+                    <select
+                      value={selectedPrefecture}
+                      onChange={(e) => setSelectedPrefecture(e.target.value)}
+                      className="w-full px-3 py-2 border border-line-separator rounded-lg text-sm"
+                    >
+                      <option value="">選択してください</option>
+                      {PREFECTURES.map((pref) => (
+                        <option key={pref} value={pref}>{pref}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* 市区町村選択 */}
+                  <div className="mb-2">
+                    <label className="block text-xs font-medium mb-1">市区町村</label>
+                    <select
+                      value={selectedCityId}
+                      onChange={(e) => setSelectedCityId(e.target.value)}
+                      className="w-full px-3 py-2 border border-line-separator rounded-lg text-sm"
+                      disabled={!selectedPrefecture}
+                    >
+                      <option value="">選択してください</option>
+                      {availableCities.map((city) => (
+                        <option key={city.id} value={city.id}>{city.name}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* 大字選択 */}
+                  <div>
+                    <label className="block text-xs font-medium mb-1">大字</label>
+                    <select
+                      value={selectedOazaId}
+                      onChange={(e) => setSelectedOazaId(e.target.value)}
+                      className="w-full px-3 py-2 border border-line-separator rounded-lg text-sm"
+                      disabled={!selectedCityId}
+                    >
+                      <option value="">選択してください</option>
+                      {availableOazas.map((oaza) => (
+                        <option key={oaza.id} value={oaza.id}>{oaza.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {/* 用途地域情報表示 */}
+                {selectedOaza && (
+                  <div className="mt-4 p-3 bg-bg-soft rounded-lg">
+                    <p className="font-medium mb-2 text-sm">{selectedOaza.name}の用途地域</p>
+                    <div className="p-2 bg-white rounded border border-line-separator text-xs">
+                      <p className="font-bold text-accent-primary">{selectedOaza.zoningDistrict.name}</p>
+                      <div className="mt-1 space-y-0.5 text-text-sub">
+                        <p>建蔽率: {selectedOaza.zoningDistrict.buildingCoverageRatio}%</p>
+                        <p>容積率: {selectedOaza.zoningDistrict.floorAreaRatio}%</p>
+                        {selectedOaza.zoningDistrict.heightLimit && <p>高さ制限: {selectedOaza.zoningDistrict.heightLimit}m</p>}
+                        <p className="text-xs text-text-sub mt-1">{selectedOaza.zoningDistrict.description}</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
             {/* 敷地図アップロード */}
             <div className="bg-white rounded-lg p-4 border border-line-separator">
               <h2 className="font-bold text-lg mb-4 flex items-center gap-2">
@@ -802,13 +1431,13 @@ export default function SitePlanPage() {
               </button>
             </div>
 
-            {/* 建物配置 */}
+            {/* 建物配置 (3-1: 間口・奥行) */}
             <div className="bg-white rounded-lg p-4 border border-line-separator">
               <h2 className="font-bold text-lg mb-4 flex items-center gap-2">
                 <svg className="w-6 h-6 text-accent-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
                 </svg>
-                3. 建物配置
+                3-1. 建物配置（間口・奥行）
               </h2>
               <div className="space-y-3">
                 {/* 建物追加フォーム */}
@@ -885,6 +1514,15 @@ export default function SitePlanPage() {
                       <p className="font-bold">合計: {calculateTsubo(editWidthKen * KEN_TO_MM, editDepthKen * KEN_TO_MM) * 2}坪</p>
                     </div>
                     <button
+                      onClick={handleRotateBuilding}
+                      className="w-full px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 flex items-center justify-center gap-2"
+                    >
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                      </svg>
+                      90度回転
+                    </button>
+                    <button
                       onClick={handleUpdateBuilding}
                       className="w-full px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 flex items-center justify-center gap-2"
                     >
@@ -907,13 +1545,122 @@ export default function SitePlanPage() {
               </div>
             </div>
 
+            {/* 建物配置 (3-2: 間取りから選択) */}
+            <div className="bg-white rounded-lg p-4 border border-line-separator">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="font-bold text-lg flex items-center gap-2">
+                  <svg className="w-6 h-6 text-accent-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                  </svg>
+                  3-2. 建物配置（間取りから選択）
+                </h2>
+                <button
+                  onClick={() => setShowAddPlanForm(true)}
+                  className="px-3 py-1 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm flex items-center gap-1 transition-colors"
+                  title="カスタムプランを追加"
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                  </svg>
+                  追加
+                </button>
+              </div>
+              <div className="space-y-3">
+                {/* 間取り選択フォーム */}
+                <div>
+                  <label className="block text-sm font-medium mb-1">間取りプラン</label>
+                  <select
+                    value={selectedFloorPlanId}
+                    onChange={(e) => setSelectedFloorPlanId(e.target.value)}
+                    className="w-full px-3 py-2 border border-line-separator rounded-lg"
+                  >
+                    <option value="">選択してください</option>
+                    <optgroup label="標準プラン">
+                      {FLOOR_PLANS.map((plan) => (
+                        <option key={plan.id} value={plan.id}>
+                          {plan.name} - {plan.category}
+                        </option>
+                      ))}
+                    </optgroup>
+                    {customFloorPlans.length > 0 && (
+                      <optgroup label="カスタムプラン">
+                        {customFloorPlans.map((plan) => (
+                          <option key={plan.id} value={plan.id}>
+                            {plan.name} - {plan.category}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+                  </select>
+                </div>
+
+                {/* 選択された間取りプランの詳細 */}
+                {selectedFloorPlan && (
+                  <div className="bg-bg-soft p-3 rounded-lg space-y-3">
+                    {/* 間取り画像プレビュー */}
+                    <div className="w-full aspect-square bg-white rounded-lg overflow-hidden border border-line-separator">
+                      <img
+                        src={selectedFloorPlan.imagePath}
+                        alt={selectedFloorPlan.name}
+                        className="w-full h-full object-contain"
+                        onError={(e) => {
+                          const target = e.target as HTMLImageElement;
+                          target.style.display = 'none';
+                          const parent = target.parentElement;
+                          if (parent) {
+                            parent.innerHTML = '<div class="flex items-center justify-center h-full text-gray-400 text-sm">画像なし</div>';
+                          }
+                        }}
+                      />
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="font-medium text-sm">{selectedFloorPlan.name}</p>
+                        {selectedFloorPlan.id.startsWith('custom-') && (
+                          <span className="text-xs px-2 py-0.5 bg-green-100 text-green-700 rounded">カスタム</span>
+                        )}
+                      </div>
+                      <div className="text-xs space-y-1">
+                        <p><strong>カテゴリ:</strong> {selectedFloorPlan.category}</p>
+                        <p><strong>サイズ:</strong> {selectedFloorPlan.widthKen}間 × {selectedFloorPlan.depthKen}間</p>
+                        <p><strong>坪数:</strong> {selectedFloorPlan.tsubo}坪（{selectedFloorPlan.floors}階）</p>
+                        <p className="text-text-sub text-xs">{selectedFloorPlan.description}</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <button
+                  onClick={handleAddBuildingFromFloorPlan}
+                  className="w-full px-4 py-2 bg-accent-primary text-white rounded-lg hover:bg-accent-hover"
+                  disabled={!siteBoundary || !selectedFloorPlan}
+                >
+                  建物を配置
+                </button>
+
+                {/* カスタムプラン削除ボタン */}
+                {selectedFloorPlan && selectedFloorPlan.id.startsWith('custom-') && (
+                  <button
+                    onClick={() => handleDeleteCustomPlan(selectedFloorPlan.id)}
+                    className="w-full px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg flex items-center justify-center gap-2 transition-colors"
+                  >
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                    カスタムプランを削除
+                  </button>
+                )}
+              </div>
+            </div>
+
             {/* 駐車場配置 */}
             <div className="bg-white rounded-lg p-4 border border-line-separator">
               <h2 className="font-bold text-lg mb-4 flex items-center gap-2">
                 <svg className="w-6 h-6 text-accent-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
                 </svg>
-                4. 駐車場配置
+                4. 車両を配置
               </h2>
               <div className="space-y-3">
                 {/* 駐車場追加フォーム */}
@@ -951,13 +1698,13 @@ export default function SitePlanPage() {
                   className="w-full px-4 py-2 bg-accent-primary text-white rounded-lg hover:bg-accent-hover"
                   disabled={!siteBoundary}
                 >
-                  駐車場を配置
+                  車両を配置
                 </button>
 
                 {/* 選択された駐車場の操作 */}
                 {selectedId && selectedId.startsWith('parking-') && (
                   <div className="mt-4 pt-4 border-t border-line-separator space-y-3">
-                    <p className="font-medium text-sm text-accent-primary">選択中の駐車場を編集</p>
+                    <p className="font-medium text-sm text-accent-primary">選択中の車両を編集</p>
                     <button
                       onClick={handleRotateParking}
                       className="w-full px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 flex items-center justify-center gap-2"
@@ -974,16 +1721,28 @@ export default function SitePlanPage() {
                       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                       </svg>
-                      駐車場を削除
+                      車両を削除
                     </button>
                   </div>
                 )}
               </div>
             </div>
           </div>
+          )}
 
           {/* キャンバスエリア */}
-          <div className="col-span-9">
+          <div className={isSidebarOpen ? "col-span-9" : "col-span-12"}>
+            {/* サイドバー表示切替ボタン */}
+            <button
+              onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+              className="mb-4 px-4 py-2 bg-dw-blue hover:bg-dw-blue-hover text-white rounded-lg flex items-center gap-2 transition-colors"
+            >
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={isSidebarOpen ? "M11 19l-7-7 7-7m8 14l-7-7 7-7" : "M13 5l7 7-7 7M5 5l7 7-7 7"} />
+              </svg>
+              {isSidebarOpen ? 'メニューを隠す' : 'メニューを表示'}
+            </button>
+
             <div className="bg-white rounded-lg p-4 border border-line-separator">
               <div className="overflow-auto">
                 <SitePlanCanvas
@@ -1005,6 +1764,8 @@ export default function SitePlanPage() {
                   calibrationPoints={calibrationPoints}
                   setCalibrationPoints={setCalibrationPoints}
                   onCalibrationComplete={handleCalibrationPointsReady}
+                  onRotateBuilding={handleRotateBuilding}
+                  onRotateParking={handleRotateParking}
                 />
               </div>
             </div>
@@ -1024,14 +1785,310 @@ export default function SitePlanPage() {
                   </ul>
                 </li>
                 <li>建物の間数を入力して配置（緑色）</li>
-                <li>駐車場を配置（車両画像）</li>
+                <li>車両を配置（車両画像）</li>
                 <li>オブジェクトをドラッグして配置調整</li>
               </ol>
             </div>
+
+            {/* 建蔽率・容積率 */}
+            {(() => {
+              const ratios = calculateCoverageRatio();
+              if (!ratios) return null;
+
+              return (
+                <div className="mt-4 bg-white rounded-lg p-4 border border-line-separator">
+                  <h3 className="font-bold mb-4 flex items-center gap-2">
+                    <svg className="w-5 h-5 text-accent-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                    </svg>
+                    建蔽率・容積率
+                  </h3>
+
+                  <div className="grid grid-cols-3 gap-4">
+                    {/* 敷地面積 */}
+                    <div className="bg-bg-soft p-3 rounded-lg">
+                      <p className="text-xs text-text-sub mb-1">敷地面積</p>
+                      <p className="text-2xl font-bold text-text-primary">
+                        {ratios.siteArea.toFixed(2)}
+                      </p>
+                      <p className="text-xs text-text-sub mt-1">m²</p>
+                    </div>
+
+                    {/* 建築面積 */}
+                    <div className="bg-bg-soft p-3 rounded-lg">
+                      <p className="text-xs text-text-sub mb-1">建築面積</p>
+                      <p className="text-2xl font-bold text-text-primary">
+                        {ratios.buildingArea.toFixed(2)}
+                      </p>
+                      <p className="text-xs text-text-sub mt-1">m²</p>
+                    </div>
+
+                    {/* 延床面積 */}
+                    <div className="bg-bg-soft p-3 rounded-lg">
+                      <p className="text-xs text-text-sub mb-1">延床面積（2階建て）</p>
+                      <p className="text-2xl font-bold text-text-primary">
+                        {ratios.totalFloorArea.toFixed(2)}
+                      </p>
+                      <p className="text-xs text-text-sub mt-1">m²</p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4 mt-4">
+                    {/* 建蔽率 */}
+                    <div className={`p-4 rounded-lg border-2 ${
+                      ratios.isValidCoverage
+                        ? 'bg-green-50 border-green-500'
+                        : 'bg-red-50 border-red-500'
+                    }`}>
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-sm font-medium">建蔽率</p>
+                        {ratios.isValidCoverage ? (
+                          <svg className="w-5 h-5 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                          </svg>
+                        ) : (
+                          <svg className="w-5 h-5 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        )}
+                      </div>
+                      <div className="flex items-end gap-2">
+                        <p className={`text-3xl font-bold ${
+                          ratios.isValidCoverage ? 'text-green-700' : 'text-red-700'
+                        }`}>
+                          {ratios.coverageRatio.toFixed(1)}
+                        </p>
+                        <p className="text-lg mb-1">%</p>
+                      </div>
+                      {selectedOaza && (
+                        <p className="text-xs text-text-sub mt-2">
+                          制限: {selectedOaza.zoningDistrict.buildingCoverageRatio}% 以下
+                        </p>
+                      )}
+                      <p className={`text-xs mt-1 font-medium ${
+                        ratios.isValidCoverage ? 'text-green-700' : 'text-red-700'
+                      }`}>
+                        {ratios.isValidCoverage ? '✓ 適合' : '✗ 不適合'}
+                      </p>
+                    </div>
+
+                    {/* 容積率 */}
+                    <div className={`p-4 rounded-lg border-2 ${
+                      ratios.isValidFloorArea
+                        ? 'bg-green-50 border-green-500'
+                        : 'bg-red-50 border-red-500'
+                    }`}>
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-sm font-medium">容積率</p>
+                        {ratios.isValidFloorArea ? (
+                          <svg className="w-5 h-5 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                          </svg>
+                        ) : (
+                          <svg className="w-5 h-5 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        )}
+                      </div>
+                      <div className="flex items-end gap-2">
+                        <p className={`text-3xl font-bold ${
+                          ratios.isValidFloorArea ? 'text-green-700' : 'text-red-700'
+                        }`}>
+                          {ratios.floorAreaRatio.toFixed(1)}
+                        </p>
+                        <p className="text-lg mb-1">%</p>
+                      </div>
+                      {selectedOaza && (
+                        <p className="text-xs text-text-sub mt-2">
+                          制限: {selectedOaza.zoningDistrict.floorAreaRatio}% 以下
+                        </p>
+                      )}
+                      <p className={`text-xs mt-1 font-medium ${
+                        ratios.isValidFloorArea ? 'text-green-700' : 'text-red-700'
+                      }`}>
+                        {ratios.isValidFloorArea ? '✓ 適合' : '✗ 不適合'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         </div>
         </main>
       </div>
+
+      {/* カスタムプラン追加モーダル */}
+      {showAddPlanForm && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-xl font-bold text-text-primary">カスタムプランを追加</h3>
+                <button
+                  onClick={() => {
+                    setShowAddPlanForm(false);
+                    setNewPlanName('');
+                    setNewPlanDescription('');
+                    setNewPlanWidthKen(5);
+                    setNewPlanDepthKen(5);
+                    setNewPlanCategory('3LDK');
+                    setNewPlanFloors(2);
+                    setNewPlanImage(null);
+                    setNewPlanImagePreview('');
+                  }}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                {/* プラン名 */}
+                <div>
+                  <label className="block text-sm font-medium mb-1">
+                    プラン名 <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={newPlanName}
+                    onChange={(e) => setNewPlanName(e.target.value)}
+                    className="w-full px-3 py-2 border border-line-separator rounded-lg focus:outline-none focus:ring-2 focus:ring-dw-blue"
+                    placeholder="例: 我が家の間取りプラン"
+                  />
+                </div>
+
+                {/* 説明 */}
+                <div>
+                  <label className="block text-sm font-medium mb-1">説明</label>
+                  <textarea
+                    value={newPlanDescription}
+                    onChange={(e) => setNewPlanDescription(e.target.value)}
+                    className="w-full px-3 py-2 border border-line-separator rounded-lg focus:outline-none focus:ring-2 focus:ring-dw-blue"
+                    rows={3}
+                    placeholder="このプランについての説明を入力してください"
+                  />
+                </div>
+
+                {/* サイズ入力 */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium mb-1">
+                      間口（間） <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="number"
+                      value={newPlanWidthKen}
+                      onChange={(e) => setNewPlanWidthKen(Number(e.target.value))}
+                      className="w-full px-3 py-2 border border-line-separator rounded-lg focus:outline-none focus:ring-2 focus:ring-dw-blue"
+                      min="1"
+                      step="0.5"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">
+                      奥行（間） <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="number"
+                      value={newPlanDepthKen}
+                      onChange={(e) => setNewPlanDepthKen(Number(e.target.value))}
+                      className="w-full px-3 py-2 border border-line-separator rounded-lg focus:outline-none focus:ring-2 focus:ring-dw-blue"
+                      min="1"
+                      step="0.5"
+                    />
+                  </div>
+                </div>
+
+                {/* カテゴリと階数 */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium mb-1">カテゴリ</label>
+                    <select
+                      value={newPlanCategory}
+                      onChange={(e) => setNewPlanCategory(e.target.value as '2LDK' | '3LDK' | '4LDK' | 'その他')}
+                      className="w-full px-3 py-2 border border-line-separator rounded-lg focus:outline-none focus:ring-2 focus:ring-dw-blue"
+                    >
+                      <option value="2LDK">2LDK</option>
+                      <option value="3LDK">3LDK</option>
+                      <option value="4LDK">4LDK</option>
+                      <option value="その他">その他</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">階数</label>
+                    <input
+                      type="number"
+                      value={newPlanFloors}
+                      onChange={(e) => setNewPlanFloors(Number(e.target.value))}
+                      className="w-full px-3 py-2 border border-line-separator rounded-lg focus:outline-none focus:ring-2 focus:ring-dw-blue"
+                      min="1"
+                      max="3"
+                    />
+                  </div>
+                </div>
+
+                {/* 坪数表示 */}
+                <div className="bg-bg-soft p-3 rounded-lg">
+                  <p className="text-sm">
+                    <strong>坪数:</strong> {calculateTsubo(newPlanWidthKen * KEN_TO_MM, newPlanDepthKen * KEN_TO_MM) * newPlanFloors}坪（{newPlanFloors}階）
+                  </p>
+                </div>
+
+                {/* 画像アップロード */}
+                <div>
+                  <label className="block text-sm font-medium mb-1">
+                    間取り画像 <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={handleImageSelect}
+                    className="w-full px-3 py-2 border border-line-separator rounded-lg focus:outline-none focus:ring-2 focus:ring-dw-blue"
+                  />
+                  {newPlanImagePreview && (
+                    <div className="mt-3 w-full aspect-square bg-gray-100 rounded-lg overflow-hidden border border-line-separator">
+                      <img
+                        src={newPlanImagePreview}
+                        alt="プレビュー"
+                        className="w-full h-full object-contain"
+                      />
+                    </div>
+                  )}
+                </div>
+
+                {/* ボタン */}
+                <div className="flex gap-3 pt-4">
+                  <button
+                    onClick={handleAddCustomPlan}
+                    className="flex-1 bg-dw-blue hover:bg-dw-blue-hover text-white font-medium px-6 py-3 rounded-lg transition-colors"
+                  >
+                    追加
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowAddPlanForm(false);
+                      setNewPlanName('');
+                      setNewPlanDescription('');
+                      setNewPlanWidthKen(5);
+                      setNewPlanDepthKen(5);
+                      setNewPlanCategory('3LDK');
+                      setNewPlanFloors(2);
+                      setNewPlanImage(null);
+                      setNewPlanImagePreview('');
+                    }}
+                    className="px-6 py-3 border-2 border-line-dark text-text-sub rounded-lg font-medium hover:bg-bg-soft transition-colors"
+                  >
+                    キャンセル
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

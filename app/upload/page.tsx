@@ -26,7 +26,7 @@ export default function UploadPage() {
 
   const handleUploadComplete = () => {
     // アップロード完了後、トップページに戻る
-    router.push('/');
+    router.push('/search');
   };
 
   // 認証チェック中はローディング表示
@@ -48,7 +48,7 @@ export default function UploadPage() {
         <div className="max-w-[1800px] mx-auto px-6 lg:px-12 py-6">
           <div className="flex items-center justify-between">
             <button
-              onClick={() => router.push('/')}
+              onClick={() => router.push('/search')}
               className="flex items-center gap-4 hover:opacity-80 transition-opacity cursor-pointer"
             >
               <img
@@ -68,7 +68,7 @@ export default function UploadPage() {
               </div>
             </button>
             <button
-              onClick={() => router.push('/')}
+              onClick={() => router.push('/search')}
               className="text-text-sub hover:text-text-primary flex items-center gap-2 transition-colors"
             >
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">

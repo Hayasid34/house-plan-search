@@ -105,7 +105,7 @@ export default function CompanyDashboard() {
                 <h1 className="text-2xl font-bold text-[#172B4D]">
                   DandoriFinder
                 </h1>
-                <p className="text-sm text-[#5E6C84]">ベンダー管理画面</p>
+                <p className="text-sm text-[#5E6C84]">管理画面</p>
               </div>
             </button>
             <div className="flex items-center gap-4">
@@ -188,7 +188,7 @@ export default function CompanyDashboard() {
               onClick={() => {
                 // 会社IDをlocalStorageに保存して、ユーザー側のページに遷移
                 localStorage.setItem('current_company_id', company?.id || '');
-                router.push('/');
+                router.push('/search');
               }}
               className="px-4 py-2 bg-[#0C66E4] hover:bg-[#0055CC] text-white rounded-md transition-colors font-medium text-sm flex items-center gap-2"
             >
