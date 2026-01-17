@@ -15,9 +15,9 @@ const SitePlanCanvas = dynamicImport(() => import('@/components/SitePlanCanvas')
   ssr: false,
 });
 
-// PDF.js workerの設定
+// PDF.js workerの設定（CDNから読み込み）
 if (typeof window !== 'undefined') {
-  pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
+  pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 }
 
 // このページを強制的に動的にレンダリング
