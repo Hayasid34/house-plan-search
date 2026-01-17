@@ -12,6 +12,8 @@ interface Building {
   widthMm: number;
   depthMm: number;
   tsubo: number;
+  rotation: number; // 0, 90, 180, 270
+  imagePath?: string; // 間取り画像のパス
 }
 
 interface Parking {
@@ -47,6 +49,8 @@ interface SitePlanCanvasProps {
   calibrationPoints: {x: number, y: number}[];
   setCalibrationPoints: (points: {x: number, y: number}[]) => void;
   onCalibrationComplete: () => void;
+  onRotateBuilding: (buildingId: string) => void;
+  onRotateParking: (parkingId: string) => void;
 }
 
 export default function SitePlanCanvas({
@@ -68,10 +72,63 @@ export default function SitePlanCanvas({
   calibrationPoints,
   setCalibrationPoints,
   onCalibrationComplete,
+  onRotateBuilding,
+  onRotateParking,
 }: SitePlanCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const stageInstanceRef = useRef<Konva.Stage | null>(null);
   const layerRef = useRef<Konva.Layer | null>(null);
+  const [carImages, setCarImages] = React.useState<Record<string, HTMLImageElement>>({});
+  const [floorPlanImages, setFloorPlanImages] = React.useState<Record<string, HTMLImageElement>>({});
+
+  // 車の画像をプリロード
+  useEffect(() => {
+    const loadCarImages = async () => {
+      const types = ['kei', 'normal', 'suv', 'minivan'];
+      const images: Record<string, HTMLImageElement> = {};
+
+      for (const type of types) {
+        const img = new Image();
+        img.src = `/images/cars/${type}.png`;
+        await new Promise((resolve) => {
+          img.onload = resolve;
+        });
+        images[type] = img;
+      }
+
+      setCarImages(images);
+    };
+
+    loadCarImages();
+  }, []);
+
+  // 間取り画像を読み込み
+  useEffect(() => {
+    const loadFloorPlanImages = async () => {
+      const imagePaths = buildings
+        .filter(b => b.imagePath)
+        .map(b => b.imagePath!)
+        .filter(path => !floorPlanImages[path]); // 未読み込みの画像のみ
+
+      if (imagePaths.length === 0) return;
+
+      const newImages = { ...floorPlanImages };
+
+      for (const path of imagePaths) {
+        const img = new Image();
+        img.src = path;
+        await new Promise((resolve, reject) => {
+          img.onload = resolve;
+          img.onerror = resolve; // エラーでも続行
+        });
+        newImages[path] = img;
+      }
+
+      setFloorPlanImages(newImages);
+    };
+
+    loadFloorPlanImages();
+  }, [buildings]);
 
   // Stageを初期化（一度だけ）
   useEffect(() => {
@@ -356,25 +413,64 @@ export default function SitePlanCanvas({
         position: `(${building.x}, ${building.y})`,
         size: `${pixelWidth} x ${pixelHeight}`,
         isValid,
-        isSelected
+        isSelected,
+        hasImage: !!building.imagePath
       });
 
       const group = new Konva.Group({
         x: building.x,
         y: building.y,
         draggable: true,
+        rotation: building.rotation,
+        offsetX: 0,
+        offsetY: 0,
       });
 
-      const rect = new Konva.Rect({
-        x: 0,
-        y: 0,
-        width: pixelWidth,
-        height: pixelHeight,
-        fill: isValid ? '#10b981' : '#ef4444',
-        opacity: 0.6,
-        stroke: isSelected ? '#fbbf24' : '#000000',
-        strokeWidth: isSelected ? 3 : 1,
-      });
+      // 間取り画像がある場合は画像を表示、なければ従来の緑の矩形
+      const hasValidImage = building.imagePath &&
+                            floorPlanImages[building.imagePath] &&
+                            floorPlanImages[building.imagePath].complete &&
+                            floorPlanImages[building.imagePath].naturalHeight !== 0;
+
+      if (hasValidImage) {
+        const floorPlanImage = floorPlanImages[building.imagePath!];
+
+        // 間取り画像を表示
+        const imageNode = new Konva.Image({
+          x: 0,
+          y: 0,
+          image: floorPlanImage,
+          width: pixelWidth,
+          height: pixelHeight,
+          opacity: isValid ? 0.9 : 0.5,
+        });
+        group.add(imageNode);
+
+        // 枠線を追加
+        const border = new Konva.Rect({
+          x: 0,
+          y: 0,
+          width: pixelWidth,
+          height: pixelHeight,
+          stroke: isSelected ? '#fbbf24' : (isValid ? '#10b981' : '#ef4444'),
+          strokeWidth: isSelected ? 3 : 2,
+          fill: 'transparent',
+        });
+        group.add(border);
+      } else {
+        // 従来の緑の矩形表示（画像がない、または読み込み失敗時）
+        const rect = new Konva.Rect({
+          x: 0,
+          y: 0,
+          width: pixelWidth,
+          height: pixelHeight,
+          fill: isValid ? '#10b981' : '#ef4444',
+          opacity: 0.6,
+          stroke: isSelected ? '#fbbf24' : '#000000',
+          strokeWidth: isSelected ? 3 : 1,
+        });
+        group.add(rect);
+      }
 
       const text = new Konva.Text({
         x: 5,
@@ -382,13 +478,20 @@ export default function SitePlanCanvas({
         text: `${building.widthKen}間×${building.depthKen}間\n${building.tsubo * 2}坪（総2階）`,
         fontSize: 12,
         fill: '#000000',
+        shadowColor: 'white',
+        shadowBlur: 3,
+        shadowOpacity: 0.8,
       });
 
-      group.add(rect);
       group.add(text);
 
       group.on('click', () => {
-        setSelectedId(building.id);
+        // 既に選択されている場合は回転
+        if (selectedId === building.id) {
+          onRotateBuilding(building.id);
+        } else {
+          setSelectedId(building.id);
+        }
       });
 
       group.on('dragend', () => {
@@ -412,75 +515,85 @@ export default function SitePlanCanvas({
       layer.add(group);
     });
 
-    // 駐車場を描画（画像なし・矩形のみ）
+    // 駐車場を描画（車の画像を使用）
     parkings.forEach((parking) => {
+      const carImage = carImages[parking.type];
+      if (!carImage) return; // 画像が読み込まれていない場合はスキップ
+
       const pixelWidth = mmToPixel(parking.widthMm);
       const pixelHeight = mmToPixel(parking.lengthMm);
 
+      // 画像の幅を15%広く表示
+      const displayPixelWidth = pixelWidth * 1.15;
+
       // 回転を考慮したバウンディングボックス
+      // 画像は縦長（高さ=width、幅=length）なので、rotation=0のときlength×widthの配置になる
       const isVertical = parking.rotation === 0 || parking.rotation === 180;
-      const displayWidth = isVertical ? pixelWidth : pixelHeight;
-      const displayHeight = isVertical ? pixelHeight : pixelWidth;
+      const displayWidth = isVertical ? pixelHeight : displayPixelWidth;
+      const displayHeight = isVertical ? displayPixelWidth : pixelHeight;
 
       const isValid = checkCivilLawDistance(parking.x, parking.y, displayWidth, displayHeight);
       const isSelected = selectedId === parking.id;
 
-      // 車種ごとの色とラベル
-      const parkingColors: Record<string, { fill: string; label: string }> = {
-        kei: { fill: '#93c5fd', label: '軽' },
-        normal: { fill: '#60a5fa', label: '普通' },
-        suv: { fill: '#3b82f6', label: 'SUV' },
-        minivan: { fill: '#2563eb', label: 'ミニバン' },
-      };
-      const config = parkingColors[parking.type] || parkingColors.normal;
-
+      // グループ全体で回転を処理
       const group = new Konva.Group({
         x: parking.x,
         y: parking.y,
         draggable: true,
+        rotation: parking.rotation,
+        // 回転の原点を左上から適切な位置に変更
+        offsetX: 0,
+        offsetY: 0,
       });
 
-      // 駐車場の矩形
-      const rect = new Konva.Rect({
+      // 車の画像（グループで回転するので、画像自体は回転なし）
+      // 画像は縦長なので、widthとheightを入れ替える
+      const imageNode = new Konva.Image({
+        image: carImage,
         x: 0,
         y: 0,
-        width: displayWidth,
-        height: displayHeight,
-        fill: config.fill,
-        opacity: 0.7,
-        stroke: isSelected ? '#fbbf24' : '#1e40af',
-        strokeWidth: isSelected ? 3 : 2,
-        cornerRadius: 3,
+        width: pixelHeight,  // lengthを幅に
+        height: displayPixelWidth,  // widthを高さに（15%拡大）
+        opacity: isValid ? 0.9 : 0.5,
       });
-      group.add(rect);
+      group.add(imageNode);
 
-      // ラベル（車種）
-      const label = new Konva.Text({
-        x: 0,
-        y: displayHeight / 2 - 10,
-        width: displayWidth,
-        text: config.label,
-        fontSize: Math.min(displayWidth, displayHeight) * 0.2,
-        fill: '#1e3a8a',
-        fontStyle: 'bold',
-        align: 'center',
-      });
-      group.add(label);
+      // 選択状態の枠
+      if (isSelected) {
+        const selectionRect = new Konva.Rect({
+          x: 0,
+          y: 0,
+          width: pixelHeight,
+          height: displayPixelWidth,
+          stroke: '#fbbf24',
+          strokeWidth: 3,
+          fill: 'transparent',
+        });
+        group.add(selectionRect);
+      }
 
-      // サイズ表示
-      const sizeText = new Konva.Text({
-        x: 0,
-        y: displayHeight / 2 + 10,
-        width: displayWidth,
-        text: `${(parking.widthMm / 1000).toFixed(1)}×${(parking.lengthMm / 1000).toFixed(1)}m`,
-        fontSize: Math.min(displayWidth, displayHeight) * 0.12,
-        fill: '#1e3a8a',
-        align: 'center',
-      });
-      group.add(sizeText);
+      // 無効位置の場合は赤枠を追加
+      if (!isValid) {
+        const warningRect = new Konva.Rect({
+          x: 0,
+          y: 0,
+          width: pixelHeight,
+          height: displayPixelWidth,
+          stroke: '#ef4444',
+          strokeWidth: 2,
+          dash: [10, 5],
+          fill: 'transparent',
+        });
+        group.add(warningRect);
+      }
 
       group.on('click', () => {
-        setSelectedId(parking.id);
+        // 既に選択されている場合は回転
+        if (selectedId === parking.id) {
+          onRotateParking(parking.id);
+        } else {
+          setSelectedId(parking.id);
+        }
       });
 
       group.on('dragend', () => {
@@ -547,7 +660,7 @@ export default function SitePlanCanvas({
     }
 
     layer.batchDraw();
-  }, [pdfImage, siteBoundary, buildings, parkings, selectedId, stageSize.width, stageSize.height, civilLawDistance, isCalibrating, calibrationPoints]);
+  }, [pdfImage, siteBoundary, buildings, parkings, selectedId, stageSize.width, stageSize.height, civilLawDistance, isCalibrating, calibrationPoints, carImages, floorPlanImages]);
 
   return <div ref={containerRef} />;
 }

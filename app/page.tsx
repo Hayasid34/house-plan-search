@@ -1,582 +1,362 @@
 'use client';
 
-import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import SearchForm, { SearchFilters } from '@/components/SearchForm';
-import PlanCard from '@/components/PlanCard';
-import AIAssistant from '@/components/AIAssistant';
-import DrawingManager from '@/components/DrawingManager';
-import PhotoManager from '@/components/PhotoManager';
-import PlanEditForm from '@/components/PlanEditForm';
-import { Plan } from '@/lib/plansData';
-import { checkAuthClient } from '@/lib/auth';
-import { getDefaultCompanyId, getCompanyById } from '@/lib/demo-data';
-import type { Company } from '@/types/database';
+import { useState, useEffect } from 'react';
 
-export default function Home() {
+export default function LandingPage() {
   const router = useRouter();
-  const [filters, setFilters] = useState<SearchFilters>({
-    layout: '',
-    floors: '',
-    minArea: '',
-    maxArea: '',
-    minSiteArea: '',
-    maxSiteArea: '',
-    features: [],
-    direction: '',
-    favoriteOnly: false,
-  });
+  const [isVisible, setIsVisible] = useState(false);
 
-  const [plans, setPlans] = useState<Plan[]>([]);
-  const [selectedPlan, setSelectedPlan] = useState<Plan | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [isEditing, setIsEditing] = useState(false);
-  const [isAuthChecking, setIsAuthChecking] = useState(true);
-  const [totalPlansCount, setTotalPlansCount] = useState(0);
-  const [company, setCompany] = useState<Company | null>(null);
-
-  // プランを取得
-  const fetchPlans = async () => {
-    setLoading(true);
-    try {
-      const params = new URLSearchParams();
-      if (filters.layout) params.append('layout', filters.layout);
-      if (filters.floors) params.append('floors', filters.floors);
-      if (filters.minArea) params.append('minArea', filters.minArea);
-      if (filters.maxArea) params.append('maxArea', filters.maxArea);
-      if (filters.minSiteArea) params.append('minSiteArea', filters.minSiteArea);
-      if (filters.maxSiteArea) params.append('maxSiteArea', filters.maxSiteArea);
-      if (filters.direction) params.append('direction', filters.direction);
-      if (filters.features.length > 0) params.append('features', filters.features.join(','));
-      if (filters.favoriteOnly) params.append('favoriteOnly', 'true');
-
-      const response = await fetch(`/api/plans?${params.toString()}`);
-      const data = await response.json();
-
-      if (data.success) {
-        setPlans(data.plans);
-      }
-    } catch (error) {
-      console.error('Failed to fetch plans:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // 全プラン数を取得（高速化: 件数のみ取得）
-  const fetchTotalPlansCount = async () => {
-    try {
-      const response = await fetch('/api/plans/count');
-      const data = await response.json();
-      if (data.success) {
-        setTotalPlansCount(data.count);
-      }
-    } catch (error) {
-      console.error('Failed to fetch total plans count:', error);
-    }
-  };
-
-  // 認証チェックと会社情報取得
   useEffect(() => {
-    const checkAuth = () => {
-      const isAuth = checkAuthClient();
-      if (!isAuth) {
-        router.push('/login');
-      } else {
-        // 会社情報を取得
-        const companyId = getDefaultCompanyId();
-        const selectedCompany = getCompanyById(companyId);
-        if (selectedCompany) {
-          setCompany(selectedCompany);
-        }
-        setIsAuthChecking(false);
-      }
-    };
-    checkAuth();
-  }, [router]);
-
-  // 初回ロード時とフィルター変更時にプランを取得
-  useEffect(() => {
-    if (!isAuthChecking) {
-      fetchPlans();
-      // 初回のみ全プラン数を取得
-      if (totalPlansCount === 0) {
-        fetchTotalPlansCount();
-      }
-    }
-  }, [filters, isAuthChecking]);
-
-  const handleSearch = (newFilters: SearchFilters) => {
-    setFilters(newFilters);
-  };
-
-  const handleDelete = async (planId: string) => {
-    if (!confirm('このプランを削除しますか？\nPDFファイルも削除されます。')) {
-      return;
-    }
-
-    try {
-      const response = await fetch(`/api/plans/${planId}`, {
-        method: 'DELETE',
-      });
-
-      const data = await response.json();
-
-      if (data.success) {
-        alert('プランを削除しました');
-        setSelectedPlan(null);
-        // プランリストと全件数を再取得
-        fetchPlans();
-        fetchTotalPlansCount();
-      } else {
-        alert('削除に失敗しました: ' + (data.error || '不明なエラー'));
-      }
-    } catch (error) {
-      console.error('Delete error:', error);
-      alert('削除中にエラーが発生しました');
-    }
-  };
-
-  const handleEdit = async (updates: Partial<Plan>) => {
-    if (!selectedPlan) return;
-
-    try {
-      const response = await fetch(`/api/plans/${selectedPlan.id}`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(updates),
-      });
-
-      const data = await response.json();
-
-      if (data.success) {
-        alert('プラン情報を更新しました');
-        setSelectedPlan(data.plan);
-        setIsEditing(false);
-        // プランリストを再取得
-        fetchPlans();
-      } else {
-        alert('更新に失敗しました: ' + (data.error || '不明なエラー'));
-      }
-    } catch (error) {
-      console.error('Update error:', error);
-      alert('更新中にエラーが発生しました');
-    }
-  };
-
-  // AIアシスタントからプランを開く
-  const handleAIPlanClick = async (planId: string) => {
-    try {
-      const response = await fetch(`/api/plans?id=${planId}`);
-      const data = await response.json();
-
-      if (data.success && data.plans.length > 0) {
-        setSelectedPlan(data.plans[0]);
-      }
-    } catch (error) {
-      console.error('Failed to fetch plan:', error);
-    }
-  };
-
-  // 図面が追加/削除されたらプラン情報を再取得
-  const handleDrawingUpdate = async () => {
-    if (selectedPlan) {
-      const response = await fetch(`/api/plans?id=${selectedPlan.id}`);
-      const data = await response.json();
-      if (data.success && data.plans.length > 0) {
-        setSelectedPlan(data.plans[0]);
-      }
-    }
-  };
-
-  // お気に入り切り替え
-  const handleFavoriteToggle = async (planId: string) => {
-    try {
-      // 楽観的更新：即座にUIを更新
-      setPlans(prevPlans =>
-        prevPlans.map(p =>
-          p.id === planId ? { ...p, favorite: !p.favorite } : p
-        )
-      );
-
-      const response = await fetch(`/api/plans/${planId}/favorite`, {
-        method: 'POST',
-      });
-
-      if (!response.ok) {
-        // エラーの場合は元に戻す
-        setPlans(prevPlans =>
-          prevPlans.map(p =>
-            p.id === planId ? { ...p, favorite: !p.favorite } : p
-          )
-        );
-        alert('お気に入りの更新に失敗しました');
-      }
-    } catch (error) {
-      console.error('Favorite toggle error:', error);
-      // エラーの場合は元に戻す
-      setPlans(prevPlans =>
-        prevPlans.map(p =>
-          p.id === planId ? { ...p, favorite: !p.favorite } : p
-        )
-      );
-      alert('お気に入りの更新中にエラーが発生しました');
-    }
-  };
-
-  // ログアウト処理
-  const handleLogout = async () => {
-    try {
-      const response = await fetch('/api/auth/logout', {
-        method: 'POST',
-      });
-
-      if (response.ok) {
-        router.push('/login');
-      }
-    } catch (error) {
-      console.error('Logout error:', error);
-      alert('ログアウト中にエラーが発生しました');
-    }
-  };
-
-  // 認証チェック中はローディング表示
-  if (isAuthChecking) {
-    return (
-      <div className="min-h-screen bg-bg-light flex items-center justify-center">
-        <div className="text-center">
-          <div className="inline-block animate-spin rounded-full h-12 w-12 border-4 border-dw-blue border-t-transparent"></div>
-          <p className="mt-4 text-text-sub">認証確認中...</p>
-        </div>
-      </div>
-    );
-  }
+    setIsVisible(true);
+  }, []);
 
   return (
-    <div className="min-h-screen bg-bg-light">
+    <div className="min-h-screen bg-bg-white">
       {/* ヘッダー */}
-      <header className="bg-white shadow-sm border-b border-line-separator">
-        <div className="px-6 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <img
-                src="/images/dandori-logo.png"
-                alt="DandoriFinder Logo"
-                width={50}
-                height={50}
-                className="object-contain"
-              />
-              <div className="text-left">
-                <h1 className="text-2xl font-bold text-text-primary">
-                  DandoriFinder
-                  {company && (
-                    <span className="ml-3 text-lg text-dw-blue">- {company.name}</span>
-                  )}
-                </h1>
-              </div>
-            </div>
-            <div className="flex items-center gap-3">
-              <button
-                onClick={() => router.push('/upload')}
-                className="bg-dw-blue hover:bg-dw-blue-hover text-white font-medium px-4 py-2 rounded-lg flex items-center gap-2 transition-colors"
-              >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                </svg>
-                プランを追加
-              </button>
-              <button
-                onClick={() => router.push('/settings/company')}
-                className="border border-line-separator hover:bg-bg-soft text-text-sub hover:text-text-primary font-medium px-4 py-2 rounded-lg flex items-center gap-2 transition-colors"
-                title="設定"
-              >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                </svg>
-                設定
-              </button>
-              <button
-                onClick={() => router.push('/change-password')}
-                className="border border-line-separator hover:bg-bg-soft text-text-sub hover:text-text-primary font-medium px-4 py-2 rounded-lg flex items-center gap-2 transition-colors"
-                title="パスワード変更"
-              >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
-                </svg>
-                パスワード変更
-              </button>
-              <button
-                onClick={handleLogout}
-                className="border border-line-separator hover:bg-bg-soft text-text-sub hover:text-text-primary font-medium px-4 py-2 rounded-lg flex items-center gap-2 transition-colors"
-                title="ログアウト"
-              >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-                </svg>
-                ログアウト
-              </button>
-            </div>
+      <header className="fixed top-0 left-0 right-0 bg-white/90 backdrop-blur-md border-b border-line-separator z-50">
+        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <img
+              src="/images/dandori-logo.png"
+              alt="DandoriFinder Logo"
+              width={36}
+              height={36}
+              className="object-contain"
+            />
+            <span className="text-xl font-bold text-text-primary">
+              DandoriFinder
+            </span>
+          </div>
+          <div className="flex items-center gap-4">
+            <button
+              onClick={() => router.push('/login')}
+              className="px-5 py-2 text-text-sub hover:text-text-primary font-medium transition-colors"
+            >
+              ログイン
+            </button>
+            <button
+              onClick={() => router.push('/login')}
+              className="px-5 py-2 bg-button-primary text-white font-medium rounded-lg hover:bg-button-primary-hover transition-colors"
+            >
+              無料で始める
+            </button>
           </div>
         </div>
       </header>
 
-      {/* サイドバーとメインコンテンツ */}
-      <div className="flex">
-        {/* 左サイドバー */}
-        <aside className="w-64 bg-white border-r border-line-separator min-h-[calc(100vh-73px)]">
-          <nav className="p-4">
-            <ul className="space-y-2">
-              <li>
-                <button
-                  onClick={() => router.push('/')}
-                  className="w-full flex items-center gap-3 px-4 py-3 text-left bg-dw-blue text-white rounded-lg font-medium"
-                >
-                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                  </svg>
-                  プラン検索
-                </button>
-              </li>
-              <li>
-                <button
-                  onClick={() => router.push('/site-plan')}
-                  className="w-full flex items-center gap-3 px-4 py-3 text-left text-text-sub hover:bg-bg-soft hover:text-text-primary rounded-lg transition-colors font-medium"
-                >
-                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
-                  </svg>
-                  敷地計画
-                </button>
-              </li>
-            </ul>
-          </nav>
-        </aside>
+      {/* ヒーローセクション */}
+      <section className="pt-32 pb-20 bg-gradient-to-b from-bg-selected to-bg-white">
+        <div className="max-w-6xl mx-auto px-6">
+          <div className={`text-center transition-all duration-1000 ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'}`}>
+            <div className="inline-flex items-center gap-2 px-4 py-2 bg-bg-active text-dw-blue rounded-full text-sm font-medium mb-8">
+              <span className="w-2 h-2 bg-dw-blue rounded-full animate-pulse"></span>
+              建築会社に特化した間取り検索アプリ
+            </div>
 
-        {/* メインコンテンツ */}
-        <main className="flex-1 p-6">
-        {/* 検索フォーム */}
-        <div className="mb-8">
-          <SearchForm onSearch={handleSearch} totalCount={totalPlansCount} />
-        </div>
+            <h1 className="text-5xl md:text-6xl font-bold text-text-primary mb-6 leading-tight tracking-tight">
+              間取り検索を、
+              <br />
+              <span className="text-dw-blue">
+                もっとスマートに
+              </span>
+            </h1>
 
-        {/* 検索結果数 */}
-        <div className="mb-6">
-          <p className="text-text-sub">
-            <span className="font-bold text-dw-blue text-xl">{plans.length}</span>
-            <span className="ml-2">件のプランが見つかりました</span>
-          </p>
-        </div>
+            <p className="text-xl text-text-sub mb-10 max-w-2xl mx-auto leading-relaxed">
+              PDFをアップロードするだけでAIが自動解析。
+              <br />
+              お客様との打ち合わせ準備を劇的に効率化します。
+            </p>
 
-        {/* ローディング状態 */}
-        {loading ? (
-          <div className="text-center py-12">
-            <div className="inline-block animate-spin rounded-full h-12 w-12 border-4 border-dw-blue border-t-transparent"></div>
-            <p className="mt-4 text-text-sub">読み込み中...</p>
-          </div>
-        ) : plans.length > 0 ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6">
-            {plans.map(plan => (
-              <PlanCard
-                key={plan.id}
-                plan={plan}
-                onClick={() => setSelectedPlan(plan)}
-                onFavoriteToggle={handleFavoriteToggle}
-              />
-            ))}
-          </div>
-        ) : (
-          <div className="text-center py-12">
-            <svg
-              className="mx-auto h-12 w-12 text-icon-disable"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-              />
-            </svg>
-            <h3 className="mt-4 text-lg font-medium text-text-primary">
-              プランが見つかりませんでした
-            </h3>
-            <p className="mt-2 text-text-sub">
-              検索条件を変更してもう一度お試しください
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-4 mb-8">
+              <button
+                onClick={() => router.push('/login')}
+                className="w-full sm:w-auto px-8 py-4 bg-button-primary text-white font-bold rounded-xl text-lg hover:bg-button-primary-hover transition-all shadow-lg hover:shadow-xl hover:-translate-y-0.5"
+              >
+                7日間無料で試す
+              </button>
+              <button
+                onClick={() => router.push('/login')}
+                className="w-full sm:w-auto px-8 py-4 bg-button-secondary text-text-primary font-medium rounded-xl text-lg border-2 border-button-secondary-frame hover:bg-button-secondary-hover hover:border-button-secondary-frame-hover transition-all"
+              >
+                デモを見る
+              </button>
+            </div>
+
+            <p className="text-sm text-text-disable">
+              クレジットカード不要 • 5プランまで永久無料
             </p>
           </div>
-        )}
-        </main>
-      </div>
 
-      {/* モーダル（プラン詳細） */}
-      {selectedPlan && (
-        <div
-          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-2 sm:p-4 z-50"
-          onClick={() => setSelectedPlan(null)}
-        >
-          <div
-            className="bg-white rounded-lg max-w-[98vw] w-full max-h-[95vh] overflow-y-auto"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="sticky top-0 bg-white border-b border-line-separator px-6 py-4 flex items-center justify-between">
-              <h2 className="text-2xl font-bold text-text-primary">
-                {selectedPlan.title}
-              </h2>
-              <div className="flex items-center gap-3">
-                {!isEditing && (
-                  <button
-                    onClick={() => setIsEditing(true)}
-                    className="text-dw-blue hover:text-dw-blue-hover transition-colors flex items-center gap-2 px-4 py-2 rounded-lg border border-dw-blue hover:bg-bg-active"
-                    title="プラン情報を編集"
-                  >
-                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                    </svg>
-                    <span className="text-sm font-medium">編集</span>
-                  </button>
-                )}
-                <button
-                  onClick={() => handleDelete(selectedPlan.id)}
-                  className="text-red-600 hover:text-red-700 transition-colors flex items-center gap-2 px-4 py-2 rounded-lg border border-red-600 hover:bg-red-50"
-                  title="プランを削除"
-                >
-                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+          {/* プロダクトイメージ */}
+          <div className={`mt-16 transition-all duration-1000 delay-300 ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'}`}>
+            <div className="relative bg-gradient-to-br from-bg-soft to-bg-medium rounded-2xl p-8 shadow-2xl">
+              <div className="aspect-video bg-bg-white rounded-xl shadow-inner flex items-center justify-center border border-line-separator">
+                <div className="text-center text-text-placeholder">
+                  <svg className="w-16 h-16 mx-auto mb-4 text-icon-basic" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2" />
                   </svg>
-                  <span className="text-sm font-medium">削除</span>
-                </button>
-                <button
-                  onClick={() => setSelectedPlan(null)}
-                  className="text-icon-sub hover:text-icon-primary transition-colors"
-                >
-                  <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
+                  <p className="text-lg font-medium">間取り検索画面</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* 特徴セクション */}
+      <section className="py-24 bg-bg-white">
+        <div className="max-w-6xl mx-auto px-6">
+          <div className="text-center mb-16">
+            <h2 className="text-3xl md:text-4xl font-bold text-text-title mb-4">
+              3つのステップで業務効率化
+            </h2>
+            <p className="text-lg text-text-sub">
+              複雑な操作は不要。直感的に使える設計です。
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+            {/* ステップ1 */}
+            <div className="group relative bg-bg-white rounded-2xl p-8 border border-line-separator hover:border-line-focused hover:shadow-xl transition-all duration-300">
+              <div className="w-12 h-12 bg-bg-selected text-dw-blue rounded-xl flex items-center justify-center text-xl font-bold mb-6 group-hover:scale-110 transition-transform">
+                1
+              </div>
+              <h3 className="text-xl font-bold text-text-primary mb-3">アップロード</h3>
+              <p className="text-text-sub leading-relaxed">
+                PDFをドラッグ&ドロップするだけ。AIが間取りの情報を自動で読み取ります。
+              </p>
+              <div className="mt-6 flex flex-wrap gap-2">
+                <span className="px-3 py-1 bg-bg-soft text-text-sub rounded-full text-sm">
+                  PDF対応
+                </span>
+                <span className="px-3 py-1 bg-bg-soft text-text-sub rounded-full text-sm">
+                  AI解析
+                </span>
               </div>
             </div>
 
-            <div className="p-4 sm:p-6">
-              {isEditing ? (
-                <PlanEditForm
-                  plan={selectedPlan}
-                  onSave={handleEdit}
-                  onCancel={() => setIsEditing(false)}
-                />
-              ) : (
-                <>
-                  {/* 基本情報 - コンパクト表示 */}
-                  <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
-                    <div className="bg-bg-soft p-3 rounded-lg">
-                      <div className="text-xs text-text-sub mb-1">間取り</div>
-                      <div className="text-xl font-bold text-dw-blue">
-                        {selectedPlan.layout === '-' ? '不明' : selectedPlan.layout}
-                      </div>
-                    </div>
-                    <div className="bg-bg-soft p-3 rounded-lg">
-                      <div className="text-xs text-text-sub mb-1">階数</div>
-                      <div className="text-xl font-bold text-text-primary">
-                        {selectedPlan.floors === '-' ? '不明' : selectedPlan.floors}
-                      </div>
-                    </div>
-                    <div className="bg-bg-soft p-3 rounded-lg">
-                      <div className="text-xs text-text-sub mb-1">建物坪数</div>
-                      <div className="text-xl font-bold text-text-primary">
-                        {selectedPlan.totalArea > 0 ? `${selectedPlan.totalArea}坪` : '不明'}
-                      </div>
-                    </div>
-                    <div className="bg-bg-soft p-3 rounded-lg">
-                      <div className="text-xs text-text-sub mb-1">進入方向</div>
-                      <div className="text-xl font-bold text-text-primary">
-                        {selectedPlan.direction === '-' ? '不明' : selectedPlan.direction}
-                      </div>
-                    </div>
-                    <div className="bg-bg-soft p-3 rounded-lg">
-                      <div className="text-xs text-text-sub mb-1">敷地面積</div>
-                      <div className="text-xl font-bold text-text-primary">
-                        {selectedPlan.siteArea > 0 ? `${selectedPlan.siteArea}坪` : '不明'}
-                      </div>
-                    </div>
-                  </div>
+            {/* ステップ2 */}
+            <div className="group relative bg-bg-white rounded-2xl p-8 border border-line-separator hover:border-line-success hover:shadow-xl transition-all duration-300">
+              <div className="w-12 h-12 bg-label-02 text-text-primary rounded-xl flex items-center justify-center text-xl font-bold mb-6 group-hover:scale-110 transition-transform">
+                2
+              </div>
+              <h3 className="text-xl font-bold text-text-primary mb-3">検索・絞り込み</h3>
+              <p className="text-text-sub leading-relaxed">
+                LDK数、面積、特徴など多彩な条件で瞬時に絞り込み。欲しい間取りがすぐ見つかります。
+              </p>
+              <div className="mt-6 flex flex-wrap gap-2">
+                <span className="px-3 py-1 bg-bg-soft text-text-sub rounded-full text-sm">
+                  高速検索
+                </span>
+                <span className="px-3 py-1 bg-bg-soft text-text-sub rounded-full text-sm">
+                  20+フィルター
+                </span>
+              </div>
+            </div>
 
-                  {/* 特徴 - コンパクト表示 */}
-                  {selectedPlan.features.length > 0 && (
-                    <div className="mb-4">
-                      <div className="flex flex-wrap gap-2">
-                        {selectedPlan.features.map((feature, index) => (
-                          <span
-                            key={`${selectedPlan.id}-modal-${feature}-${index}`}
-                            className={`px-2 py-1 text-sm rounded font-medium ${
-                              index % 4 === 0 ? 'bg-label-01 text-text-primary' :
-                              index % 4 === 1 ? 'bg-label-02 text-text-primary' :
-                              index % 4 === 2 ? 'bg-label-06 text-text-primary' :
-                              'bg-label-05 text-text-primary'
-                            }`}
-                          >
-                            {feature}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* PDF表示エリア */}
-                  <div className="mt-6">
-                    <h3 className="text-lg font-bold text-text-primary mb-3">図面プレビュー</h3>
-                    {/* 元のファイル名を表示 */}
-                    <div className="bg-dw-blue text-white px-4 py-3 rounded-t-lg font-medium">
-                      📄 {selectedPlan.originalFilename || selectedPlan.title + '.pdf'}
-                    </div>
-                    <div className="bg-bg-soft border-2 border-t-0 border-line-focused rounded-b-lg overflow-hidden">
-                      <iframe
-                        src={selectedPlan.pdfPath}
-                        className="w-full h-[75vh]"
-                        title="PDF Preview"
-                      />
-                    </div>
-                    <div className="mt-4 text-center">
-                      <a
-                        href={selectedPlan.pdfPath}
-                        download={selectedPlan.originalFilename}
-                        className="inline-flex items-center gap-2 bg-dw-blue hover:bg-dw-blue-hover text-white font-medium px-6 py-3 rounded-lg transition-colors"
-                      >
-                        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                        </svg>
-                        PDFをダウンロード
-                      </a>
-                    </div>
-                  </div>
-
-                  {/* 図面 */}
-                  <DrawingManager
-                    planId={selectedPlan.id}
-                    drawings={selectedPlan.drawings || []}
-                    onDrawingAdded={handleDrawingUpdate}
-                    onDrawingDeleted={handleDrawingUpdate}
-                  />
-
-                  {/* 写真 */}
-                  <PhotoManager
-                    planId={selectedPlan.id}
-                    photos={selectedPlan.photos || []}
-                    onPhotoAdded={handleDrawingUpdate}
-                    onPhotoDeleted={handleDrawingUpdate}
-                  />
-                </>
-              )}
+            {/* ステップ3 */}
+            <div className="group relative bg-bg-white rounded-2xl p-8 border border-line-separator hover:border-dw-blue hover:shadow-xl transition-all duration-300">
+              <div className="w-12 h-12 bg-label-05 text-text-primary rounded-xl flex items-center justify-center text-xl font-bold mb-6 group-hover:scale-110 transition-transform">
+                3
+              </div>
+              <h3 className="text-xl font-bold text-text-primary mb-3">提案・共有</h3>
+              <p className="text-text-sub leading-relaxed">
+                お気に入り登録や敷地計画機能で、お客様への提案準備がスムーズに完了。
+              </p>
+              <div className="mt-6 flex flex-wrap gap-2">
+                <span className="px-3 py-1 bg-bg-soft text-text-sub rounded-full text-sm">
+                  敷地計画
+                </span>
+                <span className="px-3 py-1 bg-bg-soft text-text-sub rounded-full text-sm">
+                  お気に入り
+                </span>
+              </div>
             </div>
           </div>
         </div>
-      )}
+      </section>
 
-      {/* AIアシスタント */}
-      <AIAssistant onPlanClick={handleAIPlanClick} />
+      {/* 機能ハイライト */}
+      <section className="py-24 bg-bg-light">
+        <div className="max-w-6xl mx-auto px-6">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-16 items-center">
+            <div>
+              <h2 className="text-3xl md:text-4xl font-bold text-text-title mb-6">
+                AIが間取りを
+                <br />
+                自動で解析
+              </h2>
+              <p className="text-lg text-text-sub mb-8 leading-relaxed">
+                PDFをアップロードするだけで、AIが間取り図から情報を自動抽出。
+                手作業での入力は不要です。
+              </p>
+              <ul className="space-y-4">
+                {['LDK数・部屋数の認識', '延床面積の自動計算', '特徴タグの自動付与', '方角・配置の把握'].map((item, i) => (
+                  <li key={i} className="flex items-center gap-3 text-text-primary">
+                    <svg className="w-5 h-5 text-line-success flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    </svg>
+                    {item}
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <div className="bg-bg-white rounded-2xl p-8 shadow-xl border border-line-separator">
+              <div className="aspect-square bg-bg-selected rounded-xl flex items-center justify-center">
+                <svg className="w-24 h-24 text-icon-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                </svg>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* 料金セクション */}
+      <section className="py-24 bg-bg-white">
+        <div className="max-w-4xl mx-auto px-6">
+          <div className="text-center mb-16">
+            <h2 className="text-3xl md:text-4xl font-bold text-text-title mb-4">
+              シンプルな料金プラン
+            </h2>
+            <p className="text-lg text-text-sub">
+              まずは無料で始めて、必要に応じてアップグレード
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+            {/* 無料プラン */}
+            <div className="bg-bg-white rounded-2xl p-8 border-2 border-line-separator hover:border-line-dark transition-colors">
+              <div className="mb-6">
+                <h3 className="text-lg font-medium text-text-sub mb-2">フリープラン</h3>
+                <div className="flex items-baseline gap-1">
+                  <span className="text-5xl font-bold text-text-primary">¥0</span>
+                  <span className="text-text-placeholder">/月</span>
+                </div>
+              </div>
+              <p className="text-text-sub mb-6">小規模チームやお試しに最適</p>
+              <ul className="space-y-3 mb-8">
+                {['5プランまで登録可能', 'AI自動解析', '基本検索機能', 'PDF閲覧'].map((item, i) => (
+                  <li key={i} className="flex items-center gap-3 text-text-primary">
+                    <svg className="w-5 h-5 text-icon-disable" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    </svg>
+                    {item}
+                  </li>
+                ))}
+              </ul>
+              <button
+                onClick={() => router.push('/login')}
+                className="w-full py-3 border-2 border-button-secondary-frame text-text-primary font-medium rounded-xl hover:bg-button-secondary-hover transition-colors"
+              >
+                無料で始める
+              </button>
+            </div>
+
+            {/* 有料プラン */}
+            <div className="bg-dw-blue rounded-2xl p-8 text-white relative overflow-hidden">
+              <div className="absolute top-4 right-4 px-3 py-1 bg-white/20 rounded-full text-sm font-medium">
+                おすすめ
+              </div>
+              <div className="mb-6">
+                <h3 className="text-lg font-medium text-white/80 mb-2">プロプラン</h3>
+                <div className="flex items-baseline gap-1">
+                  <span className="text-5xl font-bold">¥5,000</span>
+                  <span className="text-white/70">〜/月</span>
+                </div>
+              </div>
+              <p className="text-white/80 mb-6">本格的に活用したいチームに</p>
+              <ul className="space-y-3 mb-8">
+                {['プラン数無制限', '高度なAI分析', 'チーム共有機能', '敷地計画ツール', '優先サポート'].map((item, i) => (
+                  <li key={i} className="flex items-center gap-3">
+                    <svg className="w-5 h-5 text-white/70" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    </svg>
+                    {item}
+                  </li>
+                ))}
+              </ul>
+              <button
+                onClick={() => router.push('/login')}
+                className="w-full py-3 bg-white text-dw-blue font-bold rounded-xl hover:bg-bg-soft transition-colors"
+              >
+                7日間無料トライアル
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* CTA */}
+      <section className="py-24 bg-bg-dark">
+        <div className="max-w-4xl mx-auto px-6 text-center">
+          <h2 className="text-3xl md:text-4xl font-bold text-white mb-6">
+            間取り検索を、今日から効率化
+          </h2>
+          <p className="text-xl text-white/70 mb-10">
+            まずは無料で始めてみませんか？
+          </p>
+          <button
+            onClick={() => router.push('/login')}
+            className="px-10 py-4 bg-white text-text-primary font-bold rounded-xl text-lg hover:bg-bg-soft transition-all shadow-xl hover:-translate-y-0.5"
+          >
+            無料アカウントを作成
+          </button>
+          <p className="mt-6 text-white/50 text-sm">
+            セットアップは1分で完了 • クレジットカード不要
+          </p>
+        </div>
+      </section>
+
+      {/* フッター */}
+      <footer className="bg-text-primary text-white/60 py-16">
+        <div className="max-w-6xl mx-auto px-6">
+          <div className="flex flex-col md:flex-row justify-between items-start gap-12 mb-12">
+            <div>
+              <div className="flex items-center gap-3 mb-4">
+                <img
+                  src="/images/dandori-logo.png"
+                  alt="DandoriFinder Logo"
+                  width={32}
+                  height={32}
+                  className="object-contain"
+                />
+                <span className="text-lg font-bold text-white">DandoriFinder</span>
+              </div>
+              <p className="text-sm max-w-xs">
+                建築会社に特化した間取り検索アプリ。
+                お客様への提案準備を効率化します。
+              </p>
+            </div>
+            <div className="flex gap-16">
+              <div>
+                <h4 className="text-white font-medium mb-4">プロダクト</h4>
+                <ul className="space-y-2 text-sm">
+                  <li><button onClick={() => router.push('/login')} className="hover:text-white transition-colors">機能一覧</button></li>
+                  <li><button onClick={() => router.push('/login')} className="hover:text-white transition-colors">料金プラン</button></li>
+                  <li><button onClick={() => router.push('/login')} className="hover:text-white transition-colors">導入事例</button></li>
+                </ul>
+              </div>
+              <div>
+                <h4 className="text-white font-medium mb-4">サポート</h4>
+                <ul className="space-y-2 text-sm">
+                  <li><button onClick={() => router.push('/login')} className="hover:text-white transition-colors">お問い合わせ</button></li>
+                  <li><button onClick={() => router.push('/login')} className="hover:text-white transition-colors">資料請求</button></li>
+                  <li><button onClick={() => router.push('/login')} className="hover:text-white transition-colors">ヘルプセンター</button></li>
+                </ul>
+              </div>
+            </div>
+          </div>
+          <div className="pt-8 border-t border-white/10 flex flex-col md:flex-row justify-between items-center gap-4 text-sm">
+            <p>&copy; 2024 DandoriFinder. All rights reserved.</p>
+            <div className="flex gap-6">
+              <button className="hover:text-white transition-colors">プライバシーポリシー</button>
+              <button className="hover:text-white transition-colors">利用規約</button>
+            </div>
+          </div>
+        </div>
+      </footer>
     </div>
   );
 }

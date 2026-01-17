@@ -76,7 +76,7 @@ export default function ChangePasswordPage() {
 
       // 3秒後にトップページにリダイレクト
       setTimeout(() => {
-        router.push('/');
+        router.push('/search');
       }, 3000);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'パスワードの変更に失敗しました');
@@ -104,7 +104,7 @@ export default function ChangePasswordPage() {
         <div className="max-w-[1800px] mx-auto px-6 lg:px-12 py-6">
           <div className="flex items-center justify-between">
             <button
-              onClick={() => router.push('/')}
+              onClick={() => router.push('/search')}
               className="flex items-center gap-4 hover:opacity-80 transition-opacity cursor-pointer"
             >
               <img
@@ -223,7 +223,7 @@ export default function ChangePasswordPage() {
               </button>
               <button
                 type="button"
-                onClick={() => router.push('/')}
+                onClick={() => router.push('/search')}
                 className="px-6 py-3 border-2 border-line-dark text-text-sub rounded-md font-medium hover:bg-bg-soft transition-colors"
                 disabled={loading}
               >

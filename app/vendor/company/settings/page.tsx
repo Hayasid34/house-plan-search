@@ -96,7 +96,7 @@ export default function CompanySettingsPage() {
                 <h1 className="text-2xl font-bold text-text-primary">
                   DandoriFinder
                 </h1>
-                <p className="text-sm text-text-sub">ベンダー管理画面</p>
+                <p className="text-sm text-text-sub">管理画面</p>
               </div>
             </button>
             <div className="flex items-center gap-4">

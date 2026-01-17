@@ -225,7 +225,7 @@ export default function AccountsPage() {
         <div className="px-6 py-4">
           <div className="flex items-center justify-between">
             <button
-              onClick={() => router.push('/')}
+              onClick={() => router.push('/search')}
               className="flex items-center gap-4 hover:opacity-80 transition-opacity cursor-pointer"
             >
               <img
@@ -243,7 +243,7 @@ export default function AccountsPage() {
             </button>
             <div className="flex items-center gap-3">
               <button
-                onClick={() => router.push('/')}
+                onClick={() => router.push('/search')}
                 className="border border-[#DFE1E6] hover:bg-[#F4F5F7] text-[#44546F] hover:text-[#172B4D] font-medium px-4 py-2 rounded-md flex items-center gap-2 transition-colors text-sm"
               >
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
