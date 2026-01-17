@@ -40,6 +40,13 @@ export default function PDFThumbnail({ pdfPath, thumbnailPath }: PDFThumbnailPro
     };
   }, []);
 
+  // サムネイルがない場合はローディング状態を解除
+  useEffect(() => {
+    if (!thumbnailPath) {
+      setIsLoading(false);
+    }
+  }, [thumbnailPath]);
+
   const handleLoad = () => {
     setIsLoading(false);
   };

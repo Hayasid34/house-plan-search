@@ -1,8 +1,7 @@
-import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
+import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf';
 import { createCanvas } from 'canvas';
 
-// PDF.jsのワーカーを設定
-// Note: サーバーサイドではワーカーを使用しない
+// サーバーサイドではワーカーを無効化
 pdfjsLib.GlobalWorkerOptions.workerSrc = '';
 
 /**
@@ -25,9 +24,7 @@ export async function generatePDFThumbnail(
     // PDFドキュメントを読み込む
     const loadingTask = pdfjsLib.getDocument({
       data: new Uint8Array(pdfBuffer),
-      useWorkerFetch: false,
-      isEvalSupported: false,
-      useSystemFonts: true,
+      verbosity: 0, // ログを抑制
     });
 
     const pdfDocument = await loadingTask.promise;
