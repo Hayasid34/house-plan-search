@@ -8,6 +8,12 @@ const nextConfig = {
       },
     ],
   },
+  // Turbopack設定（Next.js 16対応）
+  turbopack: {
+    resolveAlias: {
+      canvas: './empty-module.js',
+    },
+  },
   webpack: (config, { isServer }) => {
     // canvas モジュールを外部化（サーバーサイドで読み込まない）
     if (isServer) {
