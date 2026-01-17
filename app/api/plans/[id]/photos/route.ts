@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { cookies } from 'next/headers';
+import { getAuthenticatedUser } from '@/lib/auth';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -46,15 +47,17 @@ export async function POST(
       );
     }
 
-    // ユーザー情報を取得
-    const { data: { user }, error: authError } = await supabase.auth.getUser(authToken.value);
+    // 認証情報を取得（Supabase認証 or ローカル認証）
+    const authResult = await getAuthenticatedUser(authToken.value, supabase, supabaseAdmin);
 
-    if (authError || !user) {
+    if ('error' in authResult) {
       return NextResponse.json(
-        { error: '認証が必要です' },
-        { status: 401 }
+        { error: authResult.error },
+        { status: authResult.status }
       );
     }
+
+    const { user, account } = authResult;
 
     // プランが存在するか確認
     const { data: plan, error: planError } = await supabaseAdmin
@@ -179,15 +182,17 @@ export async function DELETE(
       );
     }
 
-    // ユーザー情報を取得
-    const { data: { user }, error: authError } = await supabase.auth.getUser(authToken.value);
+    // 認証情報を取得（Supabase認証 or ローカル認証）
+    const authResult = await getAuthenticatedUser(authToken.value, supabase, supabaseAdmin);
 
-    if (authError || !user) {
+    if ('error' in authResult) {
       return NextResponse.json(
-        { error: '認証が必要です' },
-        { status: 401 }
+        { error: authResult.error },
+        { status: authResult.status }
       );
     }
+
+    const { user, account } = authResult;
 
     // 写真情報を取得
     const { data: photo, error: photoError } = await supabaseAdmin
