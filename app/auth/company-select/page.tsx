@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 
 interface Company {
@@ -15,7 +15,7 @@ interface Company {
   is_full: boolean;
 }
 
-export default function CompanySelectPage() {
+function CompanySelectContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const next = searchParams.get('next') || '/search';
@@ -261,5 +261,13 @@ export default function CompanySelectPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function CompanySelectPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-bg-light flex items-center justify-center"><p>読み込み中...</p></div>}>
+      <CompanySelectContent />
+    </Suspense>
   );
 }
